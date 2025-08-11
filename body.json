@@ -1,0 +1,6 @@
+{
+  "system": "You are Astro-Baba assistant.",
+  "messages": [
+    { "role": "user", "content": "Stream a short greeting in 1 sentence." }
+  ]
+}

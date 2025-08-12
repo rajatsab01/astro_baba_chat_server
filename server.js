@@ -61,7 +61,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// Streaming (SSE passthrough)
+// Streaming (SSE bridge)
 app.post('/chat/stream', async (req, res) => {
   const ac = new AbortController();
   try {
@@ -69,7 +69,7 @@ app.post('/chat/stream', async (req, res) => {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
+      'X-Accel-Buffering': 'no',    // hint for reverse proxies not to buffer
       'Access-Control-Allow-Origin': '*'
     });
     if (res.flushHeaders) res.flushHeaders();
@@ -88,7 +88,7 @@ app.post('/chat/stream', async (req, res) => {
       stream: true
     };
 
-    // Abort upstream if the client disconnects
+    // Abort upstream if client disconnects
     req.on('close', () => {
       try { ac.abort(); } catch {}
     });
@@ -111,10 +111,47 @@ app.post('/chat/stream', async (req, res) => {
       return res.end();
     }
 
-    // Passthrough OpenAI SSE
+    // Robust SSE bridge: parse upstream chunks and re-emit clean data lines
+    const decoder = new TextDecoder();
+    let buffer = '';
+
     for await (const chunk of r.body) {
-      res.write(chunk);
+      buffer += decoder.decode(chunk, { stream: true });
+
+      // Process complete events separated by blank lines
+      let sepIndex;
+      while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
+        const event = buffer.slice(0, sepIndex);
+        buffer = buffer.slice(sepIndex + 2);
+
+        // Each event can have multiple lines like "data: {...}"
+        const lines = event.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          if (trimmed.startsWith('data:')) {
+            const dataPart = trimmed.slice(5).trim();
+
+            // Forward the data line as-is
+            res.write(`data: ${dataPart}\n\n`);
+
+            // Stop condition (OpenAI sends [DONE])
+            if (dataPart === '[DONE]') {
+              res.end();
+              return;
+            }
+          }
+          // Ignore other fields like "event:" or "id:"; not needed for our client
+        }
+      }
     }
+
+    // Flush any remaining partial data (unlikely) then close
+    if (buffer.trim()) {
+      res.write(`data: ${buffer.trim()}\n\n`);
+    }
+    res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
     if (ac.signal.aborted) return res.end(); // client disconnected

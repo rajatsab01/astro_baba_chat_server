@@ -6,30 +6,20 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
-// ── 1) Read & sanitize key ─────────────────────────────────────────────
+// --- Read & sanitize the key (remove stray < > and whitespace) ---
 const RAW_OPENAI = process.env.OPENAI_API_KEY || '';
-const OPENAI_API_KEY = RAW_OPENAI.trim().replace(/[<>]/g, ''); // strip < >
-const SHARED_TOKEN = process.env.SHARED_TOKEN || null;
+const OPENAI_API_KEY = RAW_OPENAI.trim().replace(/[<>]/g, '');
 
 const mask = (k) => (k ? `${k.slice(0, 10)}...${k.slice(-4)}` : '(missing)');
 console.log('OPENAI_API_KEY raw (masked):', mask(RAW_OPENAI));
 console.log('OPENAI_API_KEY used (masked):', mask(OPENAI_API_KEY));
 
-// ── 2) Optional shared token for /chat* (OFF if not set) ───────────────
-app.use((req, res, next) => {
-  if (SHARED_TOKEN && req.path.startsWith('/chat')) {
-    if (req.headers['x-api-key'] !== SHARED_TOKEN) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-  }
-  next();
-});
-
-// ── 3) Health & debug ──────────────────────────────────────────────────
+// Health
 app.get('/', (_req, res) => {
   res.json({ ok: true, service: 'Astro-Baba Chat API' });
 });
 
+// Debug (masked): see exactly what the service is using
 app.get('/debug/key', (_req, res) => {
   const raw = RAW_OPENAI;
   const used = OPENAI_API_KEY;
@@ -47,8 +37,8 @@ app.get('/debug/key', (_req, res) => {
   });
 });
 
-// Simple SSE test (no OpenAI)
-app.get('/sse-test', async (_req, res) => {
+// SSE self-test (no OpenAI) — proves Render streaming path works
+app.get('/sse-test', (_req, res) => {
   res.set({
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
@@ -57,7 +47,8 @@ app.get('/sse-test', async (_req, res) => {
     'Access-Control-Allow-Origin': '*',
   });
   if (res.flushHeaders) res.flushHeaders();
-  res.write(':\n\n');
+  res.write(':\n\n'); // heartbeat
+
   let i = 0;
   const timer = setInterval(() => {
     i++;
@@ -70,7 +61,7 @@ app.get('/sse-test', async (_req, res) => {
   }, 300);
 });
 
-// ── 4) Non-stream endpoint ─────────────────────────────────────────────
+// --- Non-streaming: standard OpenAI call (one-shot) ---
 app.post('/chat', async (req, res) => {
   try {
     const { messages = [], system, model = 'gpt-4o-mini', temperature = 0.7 } = req.body || {};
@@ -88,10 +79,7 @@ app.post('/chat', async (req, res) => {
 
     const r = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(payload)
     });
 
@@ -109,63 +97,10 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// ── 5) Streaming endpoint with fallback ────────────────────────────────
+// --- Streaming (SAFE fallback): fetch once, then drip chunks as SSE ---
 app.post('/chat/stream', async (req, res) => {
-  const ac = new AbortController();
-
-  // Helper: send one SSE chunk in OpenAI chunk shape
-  const sendChunk = (piece) => {
-    const payload = { id: 'local', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: piece }, finish_reason: null }] };
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  };
-
-  // Helper: fake stream if real SSE is stuck (drip text)
-  const fakeStream = async (messages, system, model, temperature) => {
-    try {
-      const payload = {
-        model,
-        temperature,
-        messages: [
-          ...(system ? [{ role: 'system', content: system }] : []),
-          ...messages
-        ],
-        stream: false
-      };
-      const r2 = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!r2.ok) {
-        const t = await r2.text();
-        res.write(`event: error\n`);
-        res.write(`data: ${JSON.stringify({ status: r2.status, message: t })}\n\n`);
-        return res.end();
-      }
-      const j = await r2.json();
-      const full = j?.choices?.[0]?.message?.content ?? '';
-      if (!full) {
-        sendChunk('(no content)');
-        res.write('data: [DONE]\n\n');
-        return res.end();
-      }
-      // Drip by small chunks
-      const CHUNK = 12; // characters per tick
-      for (let i = 0; i < full.length; i += CHUNK) {
-        sendChunk(full.slice(i, i + CHUNK));
-        await new Promise(r => setTimeout(r, 25));
-      }
-      res.write('data: [DONE]\n\n');
-      res.end();
-    } catch (err) {
-      console.error('fakeStream error', err);
-      res.write(`event: error\n`);
-      res.write(`data: ${JSON.stringify({ message: 'Server error (fallback)' })}\n\n`);
-      res.end();
-    }
-  };
-
   try {
+    const { messages = [], system, model = 'gpt-4o-mini', temperature = 0.7 } = req.body || {};
     if (!OPENAI_API_KEY) {
       res.set({ 'Content-Type': 'text/event-stream; charset=utf-8' });
       res.write('event: error\n');
@@ -173,103 +108,77 @@ app.post('/chat/stream', async (req, res) => {
       return res.end();
     }
 
+    // 1) Call OpenAI non-stream to get full text
+    const payload = {
+      model,
+      temperature,
+      messages: [
+        ...(system ? [{ role: 'system', content: system }] : []),
+        ...messages
+      ],
+      stream: false
+    };
+
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    // Prepare SSE response headers (so client starts reading)
     res.set({
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
-      'Access-Control-Allow-Origin': '*'
+      'Access-Control-Allow-Origin': '*',
     });
     if (res.flushHeaders) res.flushHeaders();
-    res.write(':\n\n'); // heartbeat immediately
+    res.write(':\n\n'); // heartbeat
 
-    const { messages = [], system, model = 'gpt-4o-mini', temperature = 0.7 } = req.body || {};
-
-    // Start a fallback timer: if no token in X ms, abort and fake-stream
-    let sawAnyToken = false;
-    const FALLBACK_MS = 3500;
-    const fallbackTimer = setTimeout(() => {
-      if (!sawAnyToken) {
-        try { ac.abort(); } catch {}
-        fakeStream(messages, system, model, temperature);
-      }
-    }, FALLBACK_MS);
-
-    // Kick off real SSE request
-    req.on('close', () => { try { ac.abort(); } catch {} });
-
-    const upstream = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${OPENAI_API_KEY}`,
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream'
-      },
-      body: JSON.stringify({
-        model,
-        temperature,
-        messages: [
-          ...(system ? [{ role: 'system', content: system }] : []),
-          ...messages
-        ],
-        stream: true
-      }),
-      signal: ac.signal
-    });
-
-    if (!upstream.ok || !upstream.body) {
-      clearTimeout(fallbackTimer);
-      const errText = await upstream.text();
-      res.write(`event: error\n`);
-      res.write(`data: ${JSON.stringify({ status: upstream.status, message: errText })}\n\n`);
+    if (!r.ok) {
+      const errText = await r.text();
+      res.write('event: error\n');
+      res.write(`data: ${JSON.stringify({ status: r.status, message: errText })}\n\n`);
       return res.end();
     }
 
-    const decoder = new TextDecoder();
-    let buffer = '';
-    for await (const chunk of upstream.body) {
-      buffer += decoder.decode(chunk, { stream: true });
+    const j = await r.json();
+    const full = j?.choices?.[0]?.message?.content ?? '';
 
-      let idx;
-      while ((idx = buffer.search(/\r?\n\r?\n/)) !== -1) {
-        const event = buffer.slice(0, idx);
-        buffer = buffer.slice(idx + (buffer[idx] === '\r' ? 4 : 2));
+    // 2) Drip the text as small "delta" chunks that match OpenAI shape
+    const sendChunk = (piece) => {
+      const chunk = {
+        id: 'local',
+        object: 'chat.completion.chunk',
+        choices: [{ index: 0, delta: { content: piece }, finish_reason: null }],
+      };
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    };
 
-        for (const line of event.split(/\r?\n/)) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          if (trimmed.startsWith('data:')) {
-            const dataPart = trimmed.slice(5).trim();
-            // forward
-            res.write(`data: ${dataPart}\n\n`);
-            if (dataPart !== '[DONE]') {
-              sawAnyToken = true;        // got at least one token
-              clearTimeout(fallbackTimer);
-            }
-            if (dataPart === '[DONE]') {
-              res.end();
-              return;
-            }
-          }
-        }
-      }
+    if (!full) {
+      sendChunk('(no content)');
+      res.write('data: [DONE]\n\n');
+      return res.end();
     }
 
-    // If we got here with no tokens (very rare), fake-stream as last resort
-    if (!sawAnyToken) {
-      clearTimeout(fallbackTimer);
-      await fakeStream(messages, system, model, temperature);
-      return;
+    const CHARS_PER_TICK = 16;
+    const TICK_MS = 25;
+    for (let i = 0; i < full.length; i += CHARS_PER_TICK) {
+      sendChunk(full.slice(i, i + CHARS_PER_TICK));
+      // small pause to feel like streaming
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r2) => setTimeout(r2, TICK_MS));
     }
 
-    if (buffer.trim()) res.write(`data: ${buffer.trim()}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
-    if (ac.signal.aborted) return; // client closed or we aborted for fallback
     console.error('POST /chat/stream error', e);
-    res.write(`event: error\n`);
-    res.write(`data: ${JSON.stringify({ message: 'Server error' })}\n\n`);
+    try {
+      res.write('event: error\n');
+      res.write(`data: ${JSON.stringify({ message: 'Server error' })}\n\n`);
+    } catch {}
     res.end();
   }
 });

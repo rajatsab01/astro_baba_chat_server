@@ -11,17 +11,47 @@ if (!OPENAI_API_KEY) {
   console.warn('WARNING: OPENAI_API_KEY is not set');
 }
 
-// Optional shared-token auth: only enforced if SHARED_TOKEN is set
+// ─────────────────────────────────────────────
+// Token middleware: ONLY enforced for /chat*
+// If SHARED_TOKEN is not set on Render, nothing is enforced.
 app.use((req, res, next) => {
-  if (SHARED_TOKEN && req.headers['x-api-key'] !== SHARED_TOKEN) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  if (SHARED_TOKEN && req.path.startsWith('/chat')) {
+    if (req.headers['x-api-key'] !== SHARED_TOKEN) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
   }
   next();
 });
+// ─────────────────────────────────────────────
 
 // Health
 app.get('/', (_req, res) => {
   res.json({ ok: true, service: 'Astro-Baba Chat API' });
+});
+
+// SSE self-test (no OpenAI call, no token needed if SHARED_TOKEN unset)
+// Use this to confirm Render streaming works end-to-end.
+app.get('/sse-test', async (_req, res) => {
+  res.set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+    'Access-Control-Allow-Origin': '*',
+  });
+  if (res.flushHeaders) res.flushHeaders();
+  res.write(':\n\n'); // heartbeat
+
+  let i = 0;
+  const timer = setInterval(() => {
+    i++;
+    res.write(`data: {"ping": ${i}}\n\n`);
+    if (i >= 5) {
+      clearInterval(timer);
+      res.write('data: [DONE]\n\n');
+      res.end();
+    }
+  }, 300);
 });
 
 // Non-streaming
@@ -61,7 +91,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// Streaming (SSE bridge)
+// Streaming (robust SSE bridge)
 app.post('/chat/stream', async (req, res) => {
   const ac = new AbortController();
   try {
@@ -69,13 +99,11 @@ app.post('/chat/stream', async (req, res) => {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',    // hint for reverse proxies not to buffer
+      'X-Accel-Buffering': 'no',
       'Access-Control-Allow-Origin': '*'
     });
     if (res.flushHeaders) res.flushHeaders();
-
-    // Kick open the pipe for some proxies
-    res.write(':\n\n');
+    res.write(':\n\n'); // heartbeat
 
     const { messages = [], system, model = 'gpt-4o-mini', temperature = 0.7 } = req.body || {};
     const payload = {
@@ -88,10 +116,7 @@ app.post('/chat/stream', async (req, res) => {
       stream: true
     };
 
-    // Abort upstream if client disconnects
-    req.on('close', () => {
-      try { ac.abort(); } catch {}
-    });
+    req.on('close', () => { try { ac.abort(); } catch {} });
 
     const r = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -111,50 +136,33 @@ app.post('/chat/stream', async (req, res) => {
       return res.end();
     }
 
-    // Robust SSE bridge: parse upstream chunks and re-emit clean data lines
     const decoder = new TextDecoder();
     let buffer = '';
-
     for await (const chunk of r.body) {
       buffer += decoder.decode(chunk, { stream: true });
-
-      // Process complete events separated by blank lines
       let sepIndex;
       while ((sepIndex = buffer.indexOf('\n\n')) !== -1) {
         const event = buffer.slice(0, sepIndex);
         buffer = buffer.slice(sepIndex + 2);
-
-        // Each event can have multiple lines like "data: {...}"
-        const lines = event.split('\n');
-        for (const line of lines) {
+        for (const line of event.split('\n')) {
           const trimmed = line.trim();
           if (!trimmed) continue;
-
           if (trimmed.startsWith('data:')) {
             const dataPart = trimmed.slice(5).trim();
-
-            // Forward the data line as-is
             res.write(`data: ${dataPart}\n\n`);
-
-            // Stop condition (OpenAI sends [DONE])
             if (dataPart === '[DONE]') {
               res.end();
               return;
             }
           }
-          // Ignore other fields like "event:" or "id:"; not needed for our client
         }
       }
     }
-
-    // Flush any remaining partial data (unlikely) then close
-    if (buffer.trim()) {
-      res.write(`data: ${buffer.trim()}\n\n`);
-    }
+    if (buffer.trim()) res.write(`data: ${buffer.trim()}\n\n`);
     res.write('data: [DONE]\n\n');
     res.end();
   } catch (e) {
-    if (ac.signal.aborted) return res.end(); // client disconnected
+    if (ac.signal.aborted) return res.end();
     console.error('POST /chat/stream error', e);
     res.write(`event: error\n`);
     res.write(`data: ${JSON.stringify({ message: 'Server error' })}\n\n`);

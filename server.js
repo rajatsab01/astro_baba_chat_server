@@ -71,15 +71,26 @@ function cleanText(s = '') {
     .replace(/ *\n */g, '\n')
     .trim();
 }
+function formatIST(dt = new Date()) {
+  const fmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit'
+  }).formatToParts(dt).reduce((acc, p) => (acc[p.type] = p.value, acc), {});
+  // yyyy-MM-dd HH:mm
+  return `${fmt.year}-${fmt.month}-${fmt.day} ${fmt.hour}:${fmt.minute}`;
+}
 
-// Greeting locked EXACTLY as requested (same for both languages)
-const GREETING = 'Namaste ji,';
+// Localized greeting
+function greeting(lang) {
+  return lang === 'hi' ? 'नमस्ते जी,' : 'Namaste ji,';
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PDF helpers
 // ─────────────────────────────────────────────────────────────────────────────
 function applyFont(doc, { lang = 'en', weight = 'regular' } = {}) {
-  // If fonts missing on server, pdfkit will use its fallback.
   if (!FONTS_READY) return;
   if (lang === 'hi') {
     doc.font(weight === 'bold' ? FONT.hi.bold : FONT.hi.regular);
@@ -90,7 +101,7 @@ function applyFont(doc, { lang = 'en', weight = 'regular' } = {}) {
 
 function drawBullets(doc, items = [], { lang = 'en' } = {}) {
   const bullet = '•';
-  items.forEach(t => doc.text(`${bullet} ${cleanText(t)}`, { paragraphGap: 2 }));
+  items.forEach(t => doc.text(`${bullet} ${cleanText(t)}`, { paragraphGap: 2, align: 'left' }));
 }
 
 function addBrandHeader(doc, { lang, brand, titleLine, subLine }) {
@@ -99,7 +110,6 @@ function addBrandHeader(doc, { lang, brand, titleLine, subLine }) {
   const startY   = doc.y;
   const startX   = doc.x;
 
-  // Left: logo (optional)
   if (hasLogo) {
     try {
       const buf = Buffer.from(brand.logoBase64, 'base64');
@@ -107,7 +117,6 @@ function addBrandHeader(doc, { lang, brand, titleLine, subLine }) {
     } catch {}
   }
 
-  // Right: app + title + subline
   const titleX = hasLogo ? startX + logoSize + 12 : startX;
 
   applyFont(doc, { lang, weight: 'bold' });
@@ -116,6 +125,7 @@ function addBrandHeader(doc, { lang, brand, titleLine, subLine }) {
   applyFont(doc, { lang, weight: 'bold' });
   doc.fontSize(18).text(titleLine, titleX, startY + 18);
 
+  // 3rd line (no brand duplication; include IST date+time)
   applyFont(doc, { lang, weight: 'regular' });
   doc.fontSize(10).fillColor('#444').text(subLine, titleX, startY + 40);
   doc.fillColor('black').moveDown(1);
@@ -133,12 +143,13 @@ function addBrandHeader(doc, { lang, brand, titleLine, subLine }) {
 function addUserBlock(doc, { lang, user }) {
   const L = (en, hi) => lang === 'hi' ? hi : en;
   const rows = [];
-  if (user?.name)  rows.push([L('Name', 'नाम'), user.name]);
-  if (user?.phone) rows.push([L('Phone', 'फ़ोन'), user.phone]);
-  if (user?.email) rows.push([L('Email', 'ईमेल'), user.email]);
-  if (user?.dob)   rows.push([L('DOB', 'जन्म तिथि'), user.dob]);
+  if (user?.name)    rows.push([L('Name', 'नाम'), user.name]);
+  if (user?.phone)   rows.push([L('Phone', 'फ़ोन'), user.phone]);
+  if (user?.email)   rows.push([L('Email', 'ईमेल'), user.email]);
+  if (user?.gender)  rows.push([L('Gender', 'लिंग'), user.gender]);
+  if (user?.dob)     rows.push([L('DOB', 'जन्म तिथि'), user.dob]);
   if (user?.tob || user?.time) rows.push([L('Time', 'जन्म समय'), user?.tob || user?.time]);
-  if (user?.place) rows.push([L('Place', 'जन्म स्थान'), user.place]);
+  if (user?.place)   rows.push([L('Place', 'जन्म स्थान'), user.place]);
   if (!rows.length) return;
 
   applyFont(doc, { lang, weight: 'bold' });
@@ -167,42 +178,70 @@ function addVedicTimings(doc, { lang, timings }) {
   doc.moveDown(0.8);
 }
 
+// New: short glossary for the four periods (requested)
+function addVedicGlossary(doc, { lang }) {
+  const L = (en, hi) => lang === 'hi' ? hi : en;
+  applyFont(doc, { lang, weight: 'bold' });
+  doc.fontSize(12).text(L('About the Vedic Periods', 'वैदिक कालखंड के बारे में'));
+  applyFont(doc, { lang });
+  doc.moveDown(0.2);
+  const lines = lang === 'hi'
+    ? [
+        'राहु काल: नए कार्य/शुभ शुरुआत के लिए अनुकूल नहीं।',
+        'यमगण्ड: यात्रा/महत्वपूर्ण कार्य से बचें।',
+        'गुलिक काल: नियमित कार्य ठीक, पर शुभ शुरुआत टालें।',
+        'अभिजीत मुहूर्त: शुभ कार्य प्रारम्भ करने के लिए अनुकूल।',
+      ]
+    : [
+        'Rahu Kaal: Not favourable for new beginnings.',
+        'Yamaganda: Avoid travel/major starts.',
+        'Gulika Kaal: Routine is fine; avoid fresh starts.',
+        'Abhijit Muhurat: Auspicious window for beginnings.',
+      ];
+  lines.forEach(t => doc.text(`• ${t}`, { paragraphGap: 2 }));
+  doc.moveDown(0.6);
+}
+
 function addSection(doc, { lang, heading, paragraphs = [] }) {
   applyFont(doc, { lang, weight: 'bold' });
   doc.fontSize(14).text(cleanText(heading));
   applyFont(doc, { lang });
   doc.moveDown(0.2);
-  paragraphs.forEach(p => doc.fontSize(12).text(cleanText(p), { paragraphGap: 6 }));
+  paragraphs.forEach(p => doc.fontSize(12).text(
+    cleanText(p),
+    { paragraphGap: 6, align: 'justify' }   // ← center/justify body text
+  ));
   doc.moveDown(0.4);
 }
 
-function addDisclaimerThankYou(doc, { lang, brand }) {
+function addDisclaimerThankYou(doc, { lang }) {
+  // Consistent disclaimer (same as personal)
   const disclaimer =
     lang === 'hi'
-      ? 'अस्वीकरण: यह मार्गदर्शन केवल संकेतात्मक है, किसी भी पेशेवर सलाह का विकल्प नहीं है।'
-      : 'Disclaimer: Guidance is indicative and not a substitute for professional advice.';
+      ? 'आपकी रिपोर्ट चिंतनशील ज्योतिषीय अंतर्दृष्टि प्रदान करती है। इसे सहायक मार्गदर्शन मानें, न कि पूर्ण भविष्यवाणी।'
+      : 'Your report offers reflective astrological insights. Treat it as supportive guidance, not an absolute prediction.';
 
   const thanks =
     lang === 'hi'
-      ? 'धन्यवाद — टीम Astro-Baba'
-      : 'Thank you — Team Astro-Baba';
+      ? 'धन्यवाद — टीम Astro-Baba.com'
+      : 'Thank you — Team Astro-Baba.com';
 
   applyFont(doc, { lang, weight: 'bold' });
   doc.text(lang === 'hi' ? 'अंतिम नोट' : 'Final Note');
   applyFont(doc, { lang });
   doc.moveDown(0.2);
-  doc.text(disclaimer);
+  doc.text(disclaimer, { align: 'justify' });
   doc.moveDown(0.6);
   doc.text(thanks);
   doc.moveDown(0.8);
 
   const year = new Date().getFullYear();
   doc.fontSize(9).fillColor('#555')
-    .text(`© ${year} ${brand?.appName || 'Astro-Baba'}`, { align: 'center' });
+    .text(`© ${year} Astro-Baba.com`, { align: 'center' });
   doc.fillColor('black');
 }
 
-// Static placeholders for now
+// Simple placeholders for now
 function getVedicTimingsForTodayIST() {
   return {
     rahuKaal: '12:00–13:30',
@@ -212,25 +251,53 @@ function getVedicTimingsForTodayIST() {
   };
 }
 
-// OpenAI translate / content (optional)
-async function callOpenAIChat({ system, messages, temperature = 0.4, model = 'gpt-4o-mini' }) {
-  assertOpenAI();
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ model, temperature, messages }),
-  });
-  if (!resp.ok) {
-    const t = await resp.text();
-    throw new Error(`OpenAI error ${resp.status}: ${t}`);
-  }
-  const data = await resp.json();
-  return data.choices?.[0]?.message?.content || '';
+// Sacred Day Focus (weekday deity + quick practice)
+function addSacredDaySection(doc, { lang, date = new Date() }) {
+  const weekday = new Intl.DateTimeFormat('en-GB', { weekday: 'long', timeZone: 'Asia/Kolkata' }).format(date);
+  const map = {
+    Monday:  { en: ['Monday • Shiva/Parvati', 'Offer milk to a Shivling; “Om Namah Shivaya” 108×'], hi: ['सोमवार • शिव/पार्वती', 'शिवलिंग पर दुग्धाभिषेक; “ॐ नमः शिवाय” 108 बार'] },
+    Tuesday: { en: ['Tuesday • Hanuman/Mars',  'Read Hanuman Chalisa; offer sindoor & jaggery'], hi: ['मंगलवार • हनुमान/मंगल', 'हनुमान चालीसा; सिंदूर व गुड़ चढ़ाएँ'] },
+    Wednesday:{en: ['Wednesday • Krishna/Mercury','Chant “Om Namo Bhagavate Vasudevaya”; donate greens'], hi: ['बुधवार • कृष्ण/बुध','“ॐ नमो भगवते वासुदेवाय” जप; हरी सब्ज़ियाँ दान']},
+    Thursday:{ en: ['Thursday • Vishnu/Brihaspati','Vishnu Sahasranama; offer chana dal & turmeric'], hi: ['गुरुवार • विष्णु/बृहस्पति','विष्णु सहस्रनाम; चने की दाल व हल्दी अर्पित']},
+    Friday:  { en: ['Friday • Lakshmi/Venus', 'Light a ghee diya; “Om Shreem Mahalakshmyai Namah”'], hi: ['शुक्रवार • लक्ष्मी/शुक्र','घी का दीपक; “ॐ श्रीं महालक्ष्म्यै नमः”'] },
+    Saturday:{ en: ['Saturday • Shani', 'Oil lamp under Peepal; Shani mantra, serve the needy'], hi: ['शनिवार • शनि','पीपल के नीचे तेल का दीपक; शनि मंत्र; सेवाभाव'] },
+    Sunday:  { en: ['Sunday • Surya', 'Arghya to Sun; “Om Suryaya Namah” 11×'], hi: ['रविवार • सूर्य','सूर्य को अर्घ्य; “ॐ सूर्याय नमः” 11 बार'] },
+  };
+  const info = map[weekday] || map['Sunday'];
+  const [head, tip] = lang === 'hi' ? info.hi : info.en;
+
+  addSection(doc, { lang, heading: head, paragraphs: [tip] });
+
+  // NOTE (tithi): plug a real Panchang API later and add a second line here.
+  // Example usage later: addSection(doc, { lang, heading: ..., paragraphs: [`Tithi: ${providedTithi}`] });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Routes
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/', (req, res) => {
+  res.json({ ok: true, service: 'Astro-Baba Chat API' });
+});
+
+app.get('/debug/key', (req, res) => {
+  res.json({ openai_key_present: !!OPENAI_API_KEY, masked: maskKey(OPENAI_API_KEY) });
+});
+
+app.get('/debug/fonts', (req, res) => {
+  res.json(checkFonts());
+});
+app.get('/debug/version', (req, res) => {
+  res.json({
+    time: new Date().toISOString(),
+    node: process.version,
+    env: process.env.NODE_ENV || 'production',
+    commit: process.env.RENDER_GIT_COMMIT || null,
+    cwd: process.cwd(),
+    fontsReady: FONTS_READY,
+  });
+});
+
+// DAILY JSON (deterministic EN/HI)
 function capSign(sign='') {
   const s = (sign || '').toLowerCase();
   const map = {
@@ -240,7 +307,6 @@ function capSign(sign='') {
   };
   return map[s] || (s.charAt(0).toUpperCase()+s.slice(1));
 }
-
 function luckyColorHi(enColor='') {
   const m = {
     'leaf green':'पत्तियों जैसा हरा',
@@ -256,40 +322,12 @@ function luckyColorHi(enColor='') {
   return m[enColor] || enColor;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Routes
-// ─────────────────────────────────────────────────────────────────────────────
-app.get('/', (req, res) => {
-  res.json({ ok: true, service: 'Astro-Baba Chat API' });
-});
-
-app.get('/debug/key', (req, res) => {
-  res.json({ openai_key_present: !!OPENAI_API_KEY, masked: maskKey(OPENAI_API_KEY) });
-});
-
-// Debug: fonts + version
-app.get('/debug/fonts', (req, res) => {
-  res.json(checkFonts());
-});
-app.get('/debug/version', (req, res) => {
-  res.json({
-    time: new Date().toISOString(),
-    node: process.version,
-    env: process.env.NODE_ENV || 'production',
-    commit: process.env.RENDER_GIT_COMMIT || null,
-    cwd: process.cwd(),
-    fontsReady: FONTS_READY,
-  });
-});
-
-// DAILY JSON (hybrid text) — deterministic templates in EN/HI
 app.get('/daily', async (req, res) => {
   const signRaw = (req.query.sign || 'aries').toString().toLowerCase();
   const signCap = capSign(signRaw);
   const lang    = pickLang({ lang: req.query.lang });
   const dateStr = todayISOIST().slice(0, 10);
 
-  // simple per-day lucky number/color (stable for a given date)
   const luckyNumber = ((new Date(dateStr).getTime() / 86400000) % 9 | 0) + 1; // 1..9
   const colorsEn = ['leaf green','amber','turquoise','coral','royal blue','maroon','violet','saffron','silver'];
   const luckyColorEn = colorsEn[(luckyNumber - 1) % colorsEn.length];
@@ -346,6 +384,7 @@ app.post('/report/from-daily', async (req, res) => {
     const { sign = 'aries', user = {}, brand = {}, lang: rawLang } = req.body || {};
     const lang    = pickLang({ lang: rawLang });
     const dateStr = todayISOIST().slice(0, 10);
+    const whenIST = formatIST(new Date());
 
     const daily = await (await fetch(
       `${req.protocol}://${req.get('host')}/daily?sign=${encodeURIComponent(sign)}&lang=${lang}`
@@ -359,34 +398,43 @@ app.post('/report/from-daily', async (req, res) => {
     applyFont(doc, { lang, weight: 'regular' });
 
     const titleLine = lang === 'hi' ? 'दैनिक राशिफल' : 'Daily Horoscope';
-    const subLine   = `${(brand?.appName || 'Astro-Baba')} • ${(user?.name || '').trim() || (lang==='hi'?'मित्र':'Friend')} • ${dateStr} (IST)`;
+    const who = (user?.name || '').trim() || (lang==='hi'?'मित्र':'Friend');
+    const subLine   = `${who} • ${whenIST} IST`; // ← no brand duplication
 
     addBrandHeader(doc, { lang, brand, titleLine, subLine });
     addUserBlock(doc,   { lang, user: {
       name:  user?.name,
       phone: user?.phone,
       email: user?.email,
+      gender:user?.gender,
       dob:   user?.dob,
       tob:   user?.time || user?.tob,
       place: user?.place,
     }});
     addVedicTimings(doc, { lang, timings: daily.vedic });
 
-    // Greeting (locked)
+    // Sacred Day (weekday focus)
+    addSacredDaySection(doc, { lang, date: new Date() });
+
+    // Greeting (localized)
     applyFont(doc, { lang, weight: 'bold' });
-    doc.fontSize(12).text(GREETING);
+    doc.fontSize(12).text(greeting(lang));
     applyFont(doc, { lang });
     doc.moveDown(0.5);
 
-    // Body (flatten markdown to plain paragraphs)
+    // Body (flatten markdown; center/justify paragraphs)
     const paragraphs = (daily.text || '').split('\n').filter(Boolean);
     paragraphs.forEach(p => {
       const line = p.replace(/^\*+|^[-–•]\s*/g, '').trim();
-      doc.fontSize(12).text(cleanText(line), { paragraphGap: 6 });
+      doc.fontSize(12).text(cleanText(line), { paragraphGap: 6, align: 'justify' });
     });
 
     doc.moveDown(0.4);
-    addDisclaimerThankYou(doc, { lang, brand });
+
+    // Short glossary for 4 periods (instead of brackets near each)
+    addVedicGlossary(doc, { lang });
+
+    addDisclaimerThankYou(doc, { lang });
 
     doc.pipe(res);
     doc.end();
@@ -396,6 +444,24 @@ app.post('/report/from-daily', async (req, res) => {
 });
 
 // GENERIC PACKAGE → PDF (gemstone / mantra / etc.)
+async function callOpenAIChat({ system, messages, temperature = 0.4, model = 'gpt-4o-mini' }) {
+  assertOpenAI();
+  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ model, temperature, messages }),
+  });
+  if (!resp.ok) {
+    const t = await resp.text();
+    throw new Error(`OpenAI error ${resp.status}: ${t}`);
+  }
+  const data = await resp.json();
+  return data.choices?.[0]?.message?.content || '';
+}
+
 app.post('/report/generate', async (req, res) => {
   try {
     const {
@@ -410,6 +476,7 @@ app.post('/report/generate', async (req, res) => {
 
     const lang    = pickLang({ lang: rawLang });
     const dateStr = todayISOIST().slice(0, 10);
+    const whenIST = formatIST(new Date());
 
     let prompt =
 `Create a concise report for package "${pkg}" using any provided inputs.
@@ -448,21 +515,25 @@ Keep it practical for a general audience.`;
     applyFont(doc, { lang });
 
     const titleLine = Title;
-    const subLine   = `${(brand?.appName || 'Astro-Baba')} • ${(user?.name || '').trim() || (lang==='hi'?'मित्र':'Friend')} • ${dateStr} (IST)`;
+    const who = (user?.name || '').trim() || (lang==='hi'?'मित्र':'Friend');
+    const subLine   = `${who} • ${whenIST} IST`; // ← no brand duplication
 
     addBrandHeader(doc, { lang, brand, titleLine, subLine });
     addUserBlock(doc,   { lang, user: {
       name:  user?.name,
       phone: user?.phone,
       email: user?.email,
+      gender:user?.gender,
       dob:   user?.dob,
       tob:   user?.time || user?.tob,
       place: user?.place,
     }});
 
-    // Greeting (locked)
+    addSacredDaySection(doc, { lang, date: new Date() });
+
+    // Greeting (localized)
     applyFont(doc, { lang, weight: 'bold' });
-    doc.fontSize(12).text(GREETING);
+    doc.fontSize(12).text(greeting(lang));
     applyFont(doc, { lang });
     doc.moveDown(0.5);
 
@@ -482,7 +553,10 @@ Keep it practical for a general audience.`;
 
     addSection(doc, { lang, heading: lang==='hi'?'उपाय':'Remedy', paragraphs: [Remedy] });
 
-    addDisclaimerThankYou(doc, { lang, brand });
+    addVedicTimings(doc, { lang, timings: getVedicTimingsForTodayIST() });
+    addVedicGlossary(doc, { lang });
+
+    addDisclaimerThankYou(doc, { lang });
 
     doc.pipe(res);
     doc.end();
@@ -497,6 +571,7 @@ app.post('/report/weekly', async (req, res) => {
     const { sign = 'aries', user = {}, brand = {}, lang: rawLang } = req.body || {};
     const lang    = pickLang({ lang: rawLang });
     const dateStr = todayISOIST().slice(0, 10);
+    const whenIST = formatIST(new Date());
 
     const days = [];
     for (let i = 0; i < 7; i++) {
@@ -513,21 +588,23 @@ app.post('/report/weekly', async (req, res) => {
     applyFont(doc, { lang });
 
     const titleLine = lang === 'hi' ? 'साप्ताहिक राशिफल (आज + 6)' : 'Weekly Horoscope (Today + 6)';
-    const subLine   = `${(brand?.appName || 'Astro-Baba')} • ${(user?.name || '').trim() || (lang==='hi'?'मित्र':'Friend')} • ${dateStr} (IST)`;
+    const who = (user?.name || '').trim() || (lang==='hi'?'मित्र':'Friend');
+    const subLine   = `${who} • ${whenIST} IST`;
 
     addBrandHeader(doc, { lang, brand, titleLine, subLine });
     addUserBlock(doc,   { lang, user: {
       name:  user?.name,
       phone: user?.phone,
       email: user?.email,
+      gender:user?.gender,
       dob:   user?.dob,
       tob:   user?.time || user?.tob,
       place: user?.place,
     }});
 
-    // Greeting (locked)
+    // Greeting (localized)
     applyFont(doc, { lang, weight: 'bold' });
-    doc.fontSize(12).text(GREETING);
+    doc.fontSize(12).text(greeting(lang));
     applyFont(doc, { lang });
     doc.moveDown(0.6);
 
@@ -538,12 +615,12 @@ app.post('/report/weekly', async (req, res) => {
       const paragraphs = (d.text || '').split('\n').filter(Boolean);
       paragraphs.forEach(p => {
         const line = p.replace(/^\*+|^[-–•]\s*/g, '').trim();
-        doc.fontSize(12).text(cleanText(line), { paragraphGap: 6 });
+        doc.fontSize(12).text(cleanText(line), { paragraphGap: 6, align: 'justify' });
       });
       doc.moveDown(0.4);
     });
 
-    addDisclaimerThankYou(doc, { lang, brand });
+    addDisclaimerThankYou(doc, { lang });
 
     doc.pipe(res);
     doc.end();

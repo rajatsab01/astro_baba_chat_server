@@ -1,2 +1,16 @@
-node_modules
+# Dependencies
+node_modules/
+
+# Environment files
 .env
+.env.*
+!.env.example
+
+# Local test artifacts (curl bodies & generated PDFs)
+body*.json
+report_body.json
+out.pdf
+*.pdf
+
+# Misc local folders accidentally created
+npm/

@@ -36,6 +36,23 @@ function checkFonts() {
 }
 const { ready: FONTS_READY } = checkFonts();
 
+// --- add near the top with your other requires ---
+function checkFonts() {
+  const base = (p) => path.join(process.cwd(), 'fonts', p);
+  const exists = {
+    'NotoSans-Regular.ttf':            fs.existsSync(base('NotoSans-Regular.ttf')),
+    'NotoSans-Bold.ttf':               fs.existsSync(base('NotoSans-Bold.ttf')),
+    'NotoSansDevanagari-Regular.ttf':  fs.existsSync(base('NotoSansDevanagari-Regular.ttf')),
+    'NotoSansDevanagari-Bold.ttf':     fs.existsSync(base('NotoSansDevanagari-Bold.ttf')),
+  };
+  return { exists, ready: Object.values(exists).every(Boolean) };
+}
+
+// --- add this route with your other debug routes ---
+app.get('/debug/fonts', (req, res) => {
+  res.json(checkFonts());
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // App / ENV
 // ─────────────────────────────────────────────────────────────────────────────

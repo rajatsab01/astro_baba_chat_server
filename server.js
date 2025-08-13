@@ -34,14 +34,26 @@ function weekdayIST(d = new Date()) {
 }
 function addDaysIST(n) {
   const now = new Date();
-  // Convert IST day boundary roughly by adding offset in ms (IST = UTC+5:30)
   const istNow = new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
   const future = new Date(istNow.getTime() + n * 24 * 60 * 60 * 1000);
-  // Return real Date (UTC) shifted back
   return new Date(future.getTime() - (5.5 * 60 * 60 * 1000));
 }
+function prettySign(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+function nowInISTText() {
+  const fmt = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+  return fmt.format(new Date());
+}
+function stripDataUrlPrefix(b64) {
+  if (!b64) return null;
+  const idx = b64.indexOf('base64,');
+  return idx >= 0 ? b64.slice(idx + 7) : b64;
+}
 
-// Fixed Vedic time slots (common Indian panchang convention)
+/** ─────────────── Fixed Vedic times ─────────────── **/
 function vedicTimesForDayIndex(dayIndex /*0=Sun..6=Sat*/) {
   const rahu = [
     '16:30–18:00', '07:30–09:00', '15:00–16:30', '12:00–13:30',
@@ -63,9 +75,8 @@ function vedicTimesForDayIndex(dayIndex /*0=Sun..6=Sat*/) {
     abhijitMuhurat: abhijit,
   };
 }
-function prettySign(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
-/** ───────────────── Daily cache (per IST day) ─────────────── **/
+/** ───────────── Daily cache (per IST day) ───────────── **/
 let dailyCacheDate = null; // 'YYYY-MM-DD'
 let dailyCache = {};       // { sign: { text, generatedAtISO } }
 
@@ -78,7 +89,7 @@ function ensureNewDay() {
 }
 
 async function generateDailyTextForDate(sign, dateISO) {
-  // On-server fallback
+  // Fallback text if no key
   if (!OPENAI_API_KEY) {
     return `${prettySign(sign)}: Keep your focus tight, avoid overpromising, and take one kind action today. • Opportunities: tidy, help, learn • Cautions: rushing • Remedy: 11 calm breaths.`;
   }
@@ -86,7 +97,7 @@ async function generateDailyTextForDate(sign, dateISO) {
     `You are Astro-Baba, a practical Vedic astrology guide.`,
     `Write a daily horoscope for "${prettySign(sign)}" in modern English.`,
     `Length: ~120–160 words, then exactly 3 bullets: Opportunities, Cautions, Remedy.`,
-    `No medical/financial guarantees. Positive, grounded, culturally sensitive for India.`,
+    `No medical/financial guarantees. Positive and culturally sensitive for India.`,
   ].join('\n');
   const user = `Date (IST): ${dateISO}. Focus only on ${prettySign(sign)}.`;
   const payload = {
@@ -117,10 +128,10 @@ async function ensureDailyForToday(sign) {
   }
 }
 
-/** ───────────────── Health & debug ───────────────────── **/
+/** ───────────────── Health ───────────────── **/
 app.get('/', (_req, res) => res.json({ ok: true, service: 'Astro-Baba Chat API' }));
 
-/** ───────────────── Daily endpoints ───────────────────── **/
+/** ───────────────── Daily/Weekly JSON ───────────────── **/
 app.get('/daily', async (req, res) => {
   try {
     const sign = String((req.query.sign || '')).toLowerCase();
@@ -144,7 +155,6 @@ app.get('/daily', async (req, res) => {
   }
 });
 
-// Weekly JSON: today (cached) + next 6 days
 app.get('/weekly', async (req, res) => {
   try {
     const sign = String((req.query.sign || '')).toLowerCase();
@@ -174,18 +184,17 @@ app.get('/weekly', async (req, res) => {
 });
 
 /** ───────────── PDF helpers ───────────── **/
-function nowInISTText() {
-  const fmt = new Intl.DateTimeFormat('en-IN', {
-    timeZone: 'Asia/Kolkata',
-    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
-    hour: '2-digit', minute: '2-digit'
-  });
-  return fmt.format(new Date());
-}
-function stripDataUrlPrefix(b64) {
-  if (!b64) return null;
-  const idx = b64.indexOf('base64,');
-  return idx >= 0 ? b64.slice(idx + 7) : b64;
+function writeHeader(doc, { appName, logoBuf, subtitleLines = [] }) {
+  if (logoBuf) {
+    try { doc.image(logoBuf, 56, 40, { fit: [80, 80] }); } catch {}
+  }
+  doc.font('Helvetica-Bold').fontSize(20).text(appName, 150, 56);
+  doc.moveDown(0.5);
+  doc.font('Helvetica').fontSize(12).fillColor('#333');
+  subtitleLines.forEach((line) => doc.text(line));
+  doc.moveDown(1);
+  doc.moveTo(56, doc.y).lineTo(539, doc.y).strokeColor('#999').stroke();
+  doc.moveDown(1);
 }
 
 /** ─────── PDF: from cached daily (fast) ─────── **/
@@ -217,30 +226,25 @@ app.post('/report/from-daily', async (req, res) => {
     const doc = new PDFDocument({ size: 'A4', margins: { top: 56, left: 56, right: 56, bottom: 56 }});
     doc.pipe(res);
 
-    // Logo
-    if (logoBase64 || logoUrl) {
-      try {
-        let logoBuf = null;
-        if (logoBase64) logoBuf = Buffer.from(logoBase64, 'base64');
-        else if (logoUrl) {
-          const imgResp = await fetch(logoUrl);
-          if (imgResp.ok) logoBuf = Buffer.from(await imgResp.arrayBuffer());
-        }
-        if (logoBuf) doc.image(logoBuf, 56, 40, { fit: [80, 80] });
-      } catch {}
-    }
+    let logoBuf = null;
+    try {
+      if (logoBase64) logoBuf = Buffer.from(logoBase64, 'base64');
+      else if (logoUrl) {
+        const imgResp = await fetch(logoUrl);
+        if (imgResp.ok) logoBuf = Buffer.from(await imgResp.arrayBuffer());
+      }
+    } catch {}
 
-    doc.font('Helvetica-Bold').fontSize(20).text(appName, 150, 56);
-    doc.moveDown(0.5);
-    doc.font('Helvetica').fontSize(12).fillColor('#333')
-      .text(`Report: Daily Horoscope (${prettySign(s)})`)
-      .text(`User: ${userName}${phone ? '  •  ' + phone : ''}`)
-      .text(`Generated: ${nowInISTText()} (IST)`);
-    doc.moveDown(1);
-    doc.moveTo(56, doc.y).lineTo(539, doc.y).strokeColor('#999').stroke();
-    doc.moveDown(1);
+    writeHeader(doc, {
+      appName,
+      logoBuf,
+      subtitleLines: [
+        `Report: Daily Horoscope (${prettySign(s)})`,
+        `User: ${userName}${phone ? '  •  ' + phone : ''}`,
+        `Generated: ${nowInISTText()} (IST)`,
+      ],
+    });
 
-    // Vedic timings
     doc.font('Helvetica-Bold').fontSize(13).fillColor('#000').text('Vedic Timings (IST)');
     doc.font('Helvetica').fontSize(12)
       .text(`• Rahu Kaal: ${timings.rahuKaal}`)
@@ -251,7 +255,6 @@ app.post('/report/from-daily', async (req, res) => {
     doc.moveTo(56, doc.y).lineTo(539, doc.y).strokeColor('#ddd').stroke();
     doc.moveDown(0.8);
 
-    // Body
     doc.font('Helvetica-Bold').fontSize(14).text(`Today’s Guidance for ${prettySign(s)}`);
     doc.moveDown(0.4);
     doc.font('Helvetica').fontSize(12).fillColor('#000');
@@ -280,7 +283,6 @@ app.post('/report/weekly', async (req, res) => {
     ensureNewDay();
     await ensureDailyForToday(s);
 
-    // Build 7 days
     const days = [];
     for (let i = 0; i < 7; i++) {
       const dateISO = istDateKey(addDaysIST(i));
@@ -310,30 +312,25 @@ app.post('/report/weekly', async (req, res) => {
     const doc = new PDFDocument({ size: 'A4', margins: { top: 56, left: 56, right: 56, bottom: 56 }});
     doc.pipe(res);
 
-    // Logo
-    if (logoBase64 || logoUrl) {
-      try {
-        let logoBuf = null;
-        if (logoBase64) logoBuf = Buffer.from(logoBase64, 'base64');
-        else if (logoUrl) {
-          const imgResp = await fetch(logoUrl);
-          if (imgResp.ok) logoBuf = Buffer.from(await imgResp.arrayBuffer());
-        }
-        if (logoBuf) doc.image(logoBuf, 56, 40, { fit: [80, 80] });
-      } catch {}
-    }
+    let logoBuf = null;
+    try {
+      if (logoBase64) logoBuf = Buffer.from(logoBase64, 'base64');
+      else if (logoUrl) {
+        const imgResp = await fetch(logoUrl);
+        if (imgResp.ok) logoBuf = Buffer.from(await imgResp.arrayBuffer());
+      }
+    } catch {}
 
-    doc.font('Helvetica-Bold').fontSize(20).text(appName, 150, 56);
-    doc.moveDown(0.5);
-    doc.font('Helvetica').fontSize(12).fillColor('#333')
-      .text(`Report: Weekly Horoscope (${prettySign(s)})`)
-      .text(`User: ${userName}${phone ? '  •  ' + phone : ''}`)
-      .text(`Generated: ${nowInISTText()} (IST)`);
-    doc.moveDown(1);
-    doc.moveTo(56, doc.y).lineTo(539, doc.y).strokeColor('#999').stroke();
-    doc.moveDown(1);
+    writeHeader(doc, {
+      appName,
+      logoBuf,
+      subtitleLines: [
+        `Report: Weekly Horoscope (${prettySign(s)})`,
+        `User: ${userName}${phone ? '  •  ' + phone : ''}`,
+        `Generated: ${nowInISTText()} (IST)`,
+      ],
+    });
 
-    // 7 sections
     days.forEach((d, idx) => {
       doc.font('Helvetica-Bold').fontSize(14).text(`${idx === 0 ? 'Day 1 (Today)' : `Day ${idx+1}`}: ${d.date}`);
       doc.moveDown(0.3);
@@ -361,7 +358,113 @@ app.post('/report/weekly', async (req, res) => {
   }
 });
 
-/** ───────────────── Chat endpoints (unchanged minimal) ───────────────── **/
+/** ─────── NEW: Generic hybrid PDF (gemstone / mantra / etc) ─────── **/
+app.post('/report/generate', async (req, res) => {
+  try {
+    const { package: pkg = 'daily_horoscope', user = {}, brand = {}, inputs = {}, model = 'gpt-4o-mini', temperature = 0.6 } = req.body || {};
+    const appName = brand.appName || 'Astro-Baba';
+    const logoBase64 = stripDataUrlPrefix(brand.logoBase64 || null);
+    const logoUrl = brand.logoUrl || null;
+    const userName = user.name || 'Friend';
+    const phone = user.phone || '';
+
+    // Minimal prompt per package
+    const pkgKey = String(pkg).toLowerCase();
+    let system, userPrompt, title;
+    if (pkgKey.includes('gemstone')) {
+      title = 'Personal Gemstone Guidance';
+      system = `You are Astro-Baba. Give practical, safe gemstone guidance for Indian audience.
+- Avoid guarantees, say “indicative”.
+- Include 3 sections: Why this gem, Wearing guidance, Care & cautions.
+- Tone: warm, modern, respectful.`;
+      userPrompt = `User: ${userName} (${phone}). Zodiac: ${inputs.zodiac || 'unknown'}. DOB: ${inputs.dob || 'unknown'}.
+Write ~300–400 words.`;
+    } else if (pkgKey.includes('mantra')) {
+      title = 'Mantra Recommendation';
+      system = `You are Astro-Baba. Recommend 1–2 simple, safe mantras.
+- Include: Mantra text (IAST), Meaning, Best time to chant, Simple procedure, Cautions.
+- No medical/financial claims.`;
+      userPrompt = `User: ${userName} (${phone}). Zodiac: ${inputs.zodiac || 'unknown'}. DOB: ${inputs.dob || 'unknown'}.
+Write ~250–350 words.`;
+    } else {
+      title = 'Astro-Baba Report';
+      system = `You are Astro-Baba. Produce a short, safe, practical spiritual guidance.`;
+      userPrompt = `User: ${userName}. Keep it concise (200–300 words).`;
+    }
+
+    // Get body text (fallback if no key)
+    let bodyText = `${title}\n\nNamaste ji, ${userName}.\n\n(Offline mode) Practical guidance will appear here.`;
+    if (OPENAI_API_KEY) {
+      const payload = {
+        model, temperature,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: userPrompt }
+        ],
+        stream: false
+      };
+      const r = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (r.ok) {
+        const j = await r.json();
+        bodyText = j?.choices?.[0]?.message?.content || bodyText;
+      } else {
+        console.warn('LLM error for /report/generate:', await r.text());
+      }
+    }
+
+    const fname = `${appName.replace(/\s+/g,'_')}_${pkgKey}_${Date.now()}.pdf`;
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': `attachment; filename="${fname}"`,
+      'Cache-Control': 'no-store'
+    });
+
+    const doc = new PDFDocument({ size: 'A4', margins: { top: 56, left: 56, right: 56, bottom: 56 }});
+    doc.pipe(res);
+
+    let logoBuf = null;
+    try {
+      if (logoBase64) logoBuf = Buffer.from(logoBase64, 'base64');
+      else if (logoUrl) {
+        const imgResp = await fetch(logoUrl);
+        if (imgResp.ok) logoBuf = Buffer.from(await imgResp.arrayBuffer());
+      }
+    } catch {}
+
+    writeHeader(doc, {
+      appName,
+      logoBuf,
+      subtitleLines: [
+        `Report: ${title}`,
+        `User: ${userName}${phone ? '  •  ' + phone : ''}`,
+        `Generated: ${nowInISTText()} (IST)`,
+      ],
+    });
+
+    doc.font('Helvetica-Bold').fontSize(16).text(title);
+    doc.moveDown(0.5);
+    doc.font('Helvetica').fontSize(12);
+
+    bodyText.split(/\n{2,}/).forEach(p => {
+      doc.text(p.trim(), { align: 'justify' });
+      doc.moveDown(0.6);
+    });
+
+    doc.moveDown(1.2);
+    doc.font('Helvetica-Oblique').fontSize(10).fillColor('#666')
+      .text(`${appName} • Personalized guidance for ${userName}`);
+    doc.end();
+  } catch (e) {
+    console.error('POST /report/generate error', e);
+    if (!res.headersSent) res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/** ───────────── Chat endpoints (as before) ───────────── **/
 app.post('/chat', async (req, res) => {
   try {
     const { messages = [], system, model = 'gpt-4o-mini', temperature = 0.7 } = req.body || {};
@@ -453,6 +556,6 @@ app.post('/chat/stream', async (req, res) => {
   }
 });
 
-/** ───────────────── Listen ─────────────────────────────── **/
+/** ───────────────── Listen ───────────────── **/
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Astro-Baba Chat API listening on ${PORT}`));

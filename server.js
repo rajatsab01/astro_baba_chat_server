@@ -32,26 +32,9 @@ function checkFonts() {
     'NotoSansDevanagari-Regular.ttf':  fs.existsSync(FONT.hi.regular),
     'NotoSansDevanagari-Bold.ttf':     fs.existsSync(FONT.hi.bold),
   };
-  return { exists, ready: Object.values(exists).every(Boolean) };
+  return { exists, ready: Object.values(exists).every(Boolean), paths: FONT };
 }
 const { ready: FONTS_READY } = checkFonts();
-
-// --- add near the top with your other requires ---
-function checkFonts() {
-  const base = (p) => path.join(process.cwd(), 'fonts', p);
-  const exists = {
-    'NotoSans-Regular.ttf':            fs.existsSync(base('NotoSans-Regular.ttf')),
-    'NotoSans-Bold.ttf':               fs.existsSync(base('NotoSans-Bold.ttf')),
-    'NotoSansDevanagari-Regular.ttf':  fs.existsSync(base('NotoSansDevanagari-Regular.ttf')),
-    'NotoSansDevanagari-Bold.ttf':     fs.existsSync(base('NotoSansDevanagari-Bold.ttf')),
-  };
-  return { exists, ready: Object.values(exists).every(Boolean) };
-}
-
-// --- add this route with your other debug routes ---
-app.get('/debug/fonts', (req, res) => {
-  res.json(checkFonts());
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // App / ENV
@@ -63,6 +46,8 @@ const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Utils
 // ─────────────────────────────────────────────────────────────────────────────
 function todayISOIST() {
   // Using ISO; we label IST in the PDF text where needed.
@@ -125,16 +110,20 @@ function addBrandHeader(doc, { lang, brand, titleLine, subLine }) {
 
   // Right: app + title + subline
   const titleX = hasLogo ? startX + logoSize + 12 : startX;
+
   applyFont(doc, { lang, weight: 'bold' });
   doc.fontSize(16).text(brand?.appName || 'Astro-Baba', titleX, startY);
+
   applyFont(doc, { lang, weight: 'bold' });
   doc.fontSize(18).text(titleLine, titleX, startY + 18);
+
   applyFont(doc, { lang, weight: 'regular' });
   doc.fontSize(10).fillColor('#444').text(subLine, titleX, startY + 40);
   doc.fillColor('black').moveDown(1);
 
   // divider
-  doc.moveTo(doc.page.margins.left, doc.y)
+  doc
+    .moveTo(doc.page.margins.left, doc.y)
     .lineTo(doc.page.width - doc.page.margins.right, doc.y)
     .strokeColor('#cccccc')
     .stroke()
@@ -149,7 +138,7 @@ function addUserBlock(doc, { lang, user }) {
   if (user?.phone) rows.push([L('Phone', 'फ़ोन'), user.phone]);
   if (user?.email) rows.push([L('Email', 'ईमेल'), user.email]);
   if (user?.dob)   rows.push([L('DOB', 'जन्म तिथि'), user.dob]);
-  if (user?.tob)   rows.push([L('Time', 'जन्म समय'), user.tob]);
+  if (user?.tob || user?.time) rows.push([L('Time', 'जन्म समय'), user?.tob || user?.time]);
   if (user?.place) rows.push([L('Place', 'जन्म स्थान'), user.place]);
   if (!rows.length) return;
 
@@ -254,13 +243,19 @@ app.get('/debug/key', (req, res) => {
   res.json({ openai_key_present: !!OPENAI_API_KEY, masked: maskKey(OPENAI_API_KEY) });
 });
 
+// Debug: fonts + version
 app.get('/debug/fonts', (req, res) => {
   res.json(checkFonts());
 });
-
-app.post('/warmup', async (req, res) => {
-  const lang = pickLang(req.body);
-  res.json({ ok: true, date: todayISOIST().slice(0, 10), lang });
+app.get('/debug/version', (req, res) => {
+  res.json({
+    time: new Date().toISOString(),
+    node: process.version,
+    env: process.env.NODE_ENV || 'production',
+    commit: process.env.RENDER_GIT_COMMIT || null,
+    cwd: process.cwd(),
+    fontsReady: FONTS_READY,
+  });
 });
 
 // DAILY JSON (hybrid text)
@@ -387,7 +382,7 @@ app.post('/report/generate', async (req, res) => {
     const dateStr = todayISOIST().slice(0, 10);
 
     let prompt =
-`Create a concise report for package "${pkg}".
+`Create a concise report for package "${pkg}" using any provided inputs.
 Return sections: Title, Intro (2 short paragraphs), Opportunities (3 bullets), Cautions (3 bullets), Remedy (1 paragraph).
 Keep it practical for a general audience.`;
     if (lang === 'hi') prompt += ` Write fully in natural Hindi (Devanagari).`;
@@ -530,5 +525,6 @@ app.post('/report/weekly', async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('OPENAI_API_KEY:', maskKey(OPENAI_API_KEY));
+  console.log(`Fonts ready: ${FONTS_READY}`);
   console.log(`Astro-Baba Chat API listening on ${PORT}`);
 });

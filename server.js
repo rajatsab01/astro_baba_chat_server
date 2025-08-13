@@ -5,7 +5,6 @@ import cors from 'cors';
 import PDFDocument from 'pdfkit';
 import fs from 'fs';
 import path from 'path';
-import fetch from 'node-fetch';
 import { fileURLToPath } from 'url';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -232,6 +231,31 @@ async function callOpenAIChat({ system, messages, temperature = 0.4, model = 'gp
   return data.choices?.[0]?.message?.content || '';
 }
 
+function capSign(sign='') {
+  const s = (sign || '').toLowerCase();
+  const map = {
+    aries:'Aries', taurus:'Taurus', gemini:'Gemini', cancer:'Cancer',
+    leo:'Leo', virgo:'Virgo', libra:'Libra', scorpio:'Scorpio',
+    sagittarius:'Sagittarius', capricorn:'Capricorn', aquarius:'Aquarius', pisces:'Pisces'
+  };
+  return map[s] || (s.charAt(0).toUpperCase()+s.slice(1));
+}
+
+function luckyColorHi(enColor='') {
+  const m = {
+    'leaf green':'पत्तियों जैसा हरा',
+    'amber':'अम्बर',
+    'turquoise':'फ़िरोज़ी',
+    'coral':'मूंगा',
+    'royal blue':'रॉयल ब्लू',
+    'maroon':'मरून',
+    'violet':'बैंगनी',
+    'saffron':'केसरिया',
+    'silver':'चांदी'
+  };
+  return m[enColor] || enColor;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Routes
 // ─────────────────────────────────────────────────────────────────────────────
@@ -258,20 +282,22 @@ app.get('/debug/version', (req, res) => {
   });
 });
 
-// DAILY JSON (hybrid text)
+// DAILY JSON (hybrid text) — deterministic templates in EN/HI
 app.get('/daily', async (req, res) => {
-  const sign = (req.query.sign || 'aries').toString().toLowerCase();
-  const lang = pickLang({ lang: req.query.lang });
+  const signRaw = (req.query.sign || 'aries').toString().toLowerCase();
+  const signCap = capSign(signRaw);
+  const lang    = pickLang({ lang: req.query.lang });
   const dateStr = todayISOIST().slice(0, 10);
 
-  const luckyNumber = ((new Date(dateStr).getTime() / 86400000) % 9 | 0) + 1; // 1..9-ish
-  const colors = ['leaf green', 'amber', 'turquoise', 'coral', 'royal blue', 'maroon', 'violet', 'saffron', 'silver'];
-  const luckyColor = colors[(luckyNumber - 1) % colors.length];
+  // simple per-day lucky number/color (stable for a given date)
+  const luckyNumber = ((new Date(dateStr).getTime() / 86400000) % 9 | 0) + 1; // 1..9
+  const colorsEn = ['leaf green','amber','turquoise','coral','royal blue','maroon','violet','saffron','silver'];
+  const luckyColorEn = colorsEn[(luckyNumber - 1) % colorsEn.length];
+  const luckyColorHiStr = luckyColorHi(luckyColorEn);
 
-  const baseEn =
-`**${sign[0].toUpperCase() + sign.slice(1)} • ${dateStr}**
+  const textEn = `**${signCap} • ${dateStr}**
 Today brings a refreshing boost of motivation. Focus your energy wisely.
-Lucky color: ${luckyColor}. Lucky number: ${luckyNumber}. Use Abhijit Muhurat for key decisions; avoid Rahu Kaal for new beginnings.
+Lucky color: ${luckyColorEn}. Lucky number: ${luckyNumber}. Use Abhijit Muhurat for key decisions; avoid Rahu Kaal for new beginnings.
 
 Opportunities:
 - Prioritize one important task before noon.
@@ -286,25 +312,29 @@ Cautions:
 Remedy:
 Light a diya in the evening and do 3 minutes of mindful breathing.`;
 
-  let text = baseEn;
-  if (lang === 'hi') {
-    try {
-      text = await callOpenAIChat({
-        system: 'Translate to natural, respectful Hindi (Devanagari). Keep markdown headings and bullet list shapes.',
-        messages: [{ role: 'user', content: baseEn }],
-        temperature: 0.2,
-      });
-    } catch {
-      // fallback to English if translation fails
-      text = baseEn;
-    }
-  }
+  const textHi = `**${signCap} • ${dateStr}**
+आज ऊर्जा में ताज़गी रहेगी—दिशा स्पष्ट रखें।
+भाग्यशाली रंग: ${luckyColorHiStr}. भाग्यशाली अंक: ${luckyNumber}.
+महत्वपूर्ण समय: महत्वपूर्ण कार्यों हेतु अभिजीत मुहूर्त का उपयोग करें; नए काम की शुरुआत के लिए राहु काल से बचें।
+
+अवसर:
+- दोपहर से पहले एक महत्वपूर्ण कार्य पूरा करें।
+- मन को रीसेट करने के लिए थोड़ी देर टहलें।
+- मध्यम-अवधि के लक्ष्यों के अनुरूप वित्त की समीक्षा करें।
+
+सावधानियाँ:
+- आवेग में खरीदारी से बचें।
+- अधिक वादे न करें।
+- जरूरी काम के समय मल्टीटास्किंग सीमित रखें।
+
+उपाय:
+शाम को दीपक जलाएँ और 3 मिनट श्वास पर सजगता का अभ्यास करें।`;
 
   res.json({
     date: dateStr,
-    sign,
+    sign: signRaw,
     lang,
-    text,
+    text: lang === 'hi' ? textHi : textEn,
     vedic: getVedicTimingsForTodayIST(),
     generatedAt: new Date().toISOString(),
   });

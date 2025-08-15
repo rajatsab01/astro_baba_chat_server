@@ -6,7 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// agents
+// agents (unchanged external files)
 import { hashCode, toISTParts, cleanText, capSign } from './agents/utils.js';
 import { policyAgent } from './agents/policy.js';
 import { dayDeityAgent } from './agents/dayDeity.js';
@@ -73,6 +73,78 @@ function formatISTFull(dt = new Date()) {
   const dateStr = ist.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric', timeZone:'Asia/Kolkata' });
   const timeStr = ist.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Kolkata' });
   return `${dateStr} ${timeStr} IST`;
+}
+
+// Always try a local logo if client didn’t send one
+function ensureBrandWithLogo(brand = {}) {
+  if (brand?.logoBase64) return brand;
+  const candidates = [
+    path.join(__dirname, 'logo.png'),
+    path.join(__dirname, 'assets', 'images', 'app_icon.png'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const b64 = fs.readFileSync(p).toString('base64');
+        return { ...brand, logoBase64: b64 };
+      }
+    } catch {}
+  }
+  return brand;
+}
+
+// Blessing line (consistent everywhere)
+const BLESS = {
+  en: 'Have a blessed day!! We wish you a very cheerful, prosperous and wonderful day ahead with lots of blessings.',
+  hi: 'आपका दिन मंगलमय हो! हम आपको अत्यंत हर्ष, समृद्धि और मंगलकामनाओं से भरा, आशीर्वादपूर्ण दिन की शुभकामनाएँ देते हैं।'
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vedic windows (12-hour day approximation; 6:00–18:00 with sunrise 06:00)
+// ─────────────────────────────────────────────────────────────────────────────
+// Mapping per weekday (0=Sun..6=Sat) for 12h-day approximation
+function approxVedicSlots12h(weekday /*0..6*/) {
+  // Rahu Kaal mapping you provided:
+  const rahu = {
+    0: '16:30–18:00', // Sun
+    1: '07:30–09:00', // Mon
+    2: '15:00–16:30', // Tue
+    3: '12:00–13:30', // Wed
+    4: '13:30–15:00', // Thu
+    5: '10:30–12:00', // Fri
+    6: '09:00–10:30', // Sat
+  }[weekday];
+
+  // Commonly used 12h patterns for Yamaganda / Gulika
+  const yamaganda = {
+    0: '12:00–13:30', // Sun
+    1: '10:30–12:00', // Mon
+    2: '09:00–10:30', // Tue
+    3: '07:30–09:00', // Wed
+    4: '06:00–07:30', // Thu
+    5: '15:00–16:30', // Fri
+    6: '13:30–15:00', // Sat
+  }[weekday];
+
+  const gulika = {
+    0: '15:00–16:30', // Sun
+    1: '13:30–15:00', // Mon
+    2: '12:00–13:30', // Tue
+    3: '10:30–12:00', // Wed
+    4: '09:00–10:30', // Thu
+    5: '07:30–09:00', // Fri
+    6: '06:00–07:30', // Sat
+  }[weekday];
+
+  // Abhijit (12h day center)
+  const abhijit = '12:05–12:52';
+  return { rahuKaal: rahu, yamaganda, gulikaKaal: gulika, abhijitMuhurat: abhijit };
+}
+
+function vedicAssumptionNote(lang='en') {
+  return lang === 'hi'
+    ? 'टिप्पणी: वैदिक समय 6:00 AM सूर्योदय और 12 घंटे के दिन पर आधारित सरलीकृत अनुमान हैं — स्थान/ऋतु के अनुसार बदल सकते हैं।'
+    : 'Note: Vedic windows use a 6:00 AM sunrise and 12-hour day approximation — actual times vary by location/season.';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -157,7 +229,11 @@ function addVedicTimings(doc, { lang, timings }) {
     [L('Abhijit Muhurat', 'अभिजीत मुहूर्त'), abhijitMuhurat || '-'],
   ];
   rows.forEach(([k, v]) => doc.text(`${k}: ${v}`));
-  doc.moveDown(0.8);
+  doc.moveDown(0.4);
+}
+function addVedicNote(doc, { lang }) {
+  doc.fontSize(9).fillColor('#666').text(vedicAssumptionNote(lang));
+  doc.fillColor('black').moveDown(0.6);
 }
 function addSection(doc, { lang, heading, paragraphs = [] }) {
   applyFont(doc, { lang, weight: 'bold' });
@@ -169,7 +245,7 @@ function addSection(doc, { lang, heading, paragraphs = [] }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Composer (pulls from all agents)
+// Composer (pulls from all agents) — DAILY
 // ─────────────────────────────────────────────────────────────────────────────
 function composeDaily({ sign='aries', lang='en', now=new Date(), user=null } = {}) {
   const s = (sign || '').toLowerCase();
@@ -179,30 +255,17 @@ function composeDaily({ sign='aries', lang='en', now=new Date(), user=null } = {
 
   const deity = dayDeityAgent(weekdayIndex, lang);
   const format = formatAgent({ lang, dateIST: ist, deityPair: deity.pair });
-  const panchang = panchangAgent();
+  const panchang = panchangAgent(); // keep your agent
   const variety = varietyAgent({ sign: s, seed, weekdayIndex });
   const fortune = fortuneLineAgent({ sign: s, ist, seed, lang });
   const qm = quoteMoodAgent(seed);
   const policy = policyAgent(lang);
   const special = specialDayAgent({ now, lang, user }); // may be null
 
-  // Optional translate for Hindi (lead + bullets + remedy only)
   let themeLead = variety.themeLead;
   let opp = variety.opportunities;
   let caut = variety.cautions;
   let remedy = variety.remedy;
-  // (If you want live Hindi via OpenAI, uncomment)
-  // if (lang === 'hi' && OPENAI_API_KEY) {
-  //   // translate lines while preserving bullet separation
-  //   const lines = [themeLead, ...opp, ...caut, remedy];
-  //   try {
-    //     const out = await translateAgent({ lang, lines });
-  //     themeLead = out[0] || themeLead;
-  //     opp = out.slice(1,4).filter(Boolean).length===3 ? out.slice(1,4) : opp;
-  //     caut= out.slice(4,7).filter(Boolean).length===3 ? out.slice(4,7) : caut;
-  //     remedy = out[7] || remedy;
-  //   } catch {}
-  // }
 
   return {
     date: dateStr,
@@ -238,16 +301,76 @@ function composeDaily({ sign='aries', lang='en', now=new Date(), user=null } = {
     },
     vedic: panchang,
     policy,
-    special, // may be null
+    special,
     brandFooter: policy.footerBrand,
 
-    // legacy flat text (kept for compatibility)
+    // legacy
     text: `**${capSign(s)} • ${dateStr}**\n${themeLead}\n${fortune.luckyLine}\n\nOpportunities:\n- ${opp.join('\n- ')}\n\nCautions:\n- ${caut.join('\n- ')}\n\nRemedy:\n${remedy}`
   };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Routes
+// Gemstone / Mantra composers (sign-only safe fallbacks)
+// ─────────────────────────────────────────────────────────────────────────────
+function rulerForSign(sign) {
+  const s = String(sign).toLowerCase();
+  const map = {
+    aries:'mars', taurus:'venus', gemini:'mercury', cancer:'moon',
+    leo:'sun', virgo:'mercury', libra:'venus', scorpio:'mars',
+    sagittarius:'jupiter', capricorn:'saturn', aquarius:'saturn', pisces:'jupiter'
+  };
+  return map[s] || 'sun';
+}
+
+function gemPlanForSign(sign) {
+  const r = rulerForSign(sign);
+  // Safe upratna alternates where needed; avoid default Venus for Aries
+  const plan = {
+    mars:   { primary:'Red Coral (Moonga)', alt:'Carnelian', tone:'discipline, courage, decisive action' },
+    venus:  { primary:'Diamond / White Sapphire (caution: chart-specific)', alt:'Opal / Zircon', tone:'harmony, relationships, aesthetics' },
+    mercury:{ primary:'Emerald (Panna)', alt:'Peridot', tone:'clarity, learning, communication' },
+    moon:   { primary:'Pearl (Moti)', alt:'Moonstone', tone:'emotional balance, calm, nourishment' },
+    sun:    { primary:'Ruby (Manik)', alt:'Garnet', tone:'confidence, leadership, vitality' },
+    jupiter:{ primary:'Yellow Sapphire (Pukhraj)', alt:'Citrine', tone:'wisdom, growth, blessings' },
+    saturn: { primary:'Blue Sapphire (Neelam — test first)', alt:'Amethyst', tone:'steadiness, structure, patience' },
+  }[r];
+
+  // Aries special guard: do not suggest Diamond by default
+  if (String(sign).toLowerCase() === 'aries') {
+    return { ...plan, note:'For Aries, avoid Venus stones by default unless a full chart approves.' };
+  }
+  return plan;
+}
+
+function mantraForPlanet(planet) {
+  const map = {
+    sun:     { seed:'Om Hram Hrim Hraum Suryaya Namah', count:108 },
+    moon:    { seed:'Om Som Somaya Namah', count:108 },
+    mars:    { seed:'Om Kraam Kreem Kraum Sah Bhaumaya Namah', count:108 },
+    mercury: { seed:'Om Braam Breem Broum Sah Budhaya Namah', count:108 },
+    jupiter: { seed:'Om Graam Greem Graum Sah Gurave Namah', count:108 },
+    venus:   { seed:'Om Draam Dreem Draum Sah Shukraya Namah', count:108 },
+    saturn:  { seed:'Om Praam Preem Praum Sah Shanaye Namah', count:108 },
+    rahu:    { seed:'Om Ram Rahave Namah', count:108 },
+    ketu:    { seed:'Om Kem Ketave Namah', count:108 },
+  };
+  return map[planet] || map.sun;
+}
+
+function powerGemText(lang) {
+  return lang === 'hi'
+    ? 'ज्योतिष परंपरा के अनुसार, रत्न सूक्ष्म लेंस की तरह सहायक ग्रह धाराओं की ओर ध्यान ट्यून करते हैं। आकार में छोटे पर प्रभाव में समर्थ—मानो बड़े ताले की छोटी चाबी। सही धातु, उचित उंगली और विधिपूर्वक ऊर्जन के साथ, रत्न अनुकूल ऊर्जा को छानकर केंद्रित करने में सहायक होता है। विश्वास और अनुशासन के साथ पहना गया सही रत्न मन को स्थिर कर सकता है, अटकी संभावनाएँ खोल सकता है और प्रतिकूल प्रभावों से सौम्य संरक्षण दे सकता है।'
+    : 'As per Jyotish tradition, gemstones act like tiny lenses that tune you toward supportive planetary currents. Small yet potent—like a small key for a big lock. Set in the proper metal, on the correct finger, and duly energized, a stone helps filter and focus favourable energies. With steady faith and discipline, a correctly prescribed stone can steady the mind, unlock stuck opportunities, and gently shield against adverse influences.';
+}
+
+function powerMantraText(lang) {
+  return lang === 'hi'
+    ? 'मंत्र छोटी चाबी की तरह बड़े ताले के लिए हो सकता है। समस्याएँ बड़ी दिखें, फिर भी सही ध्वनि का सही जप मनोदशा, एकाग्रता और कृपा को सँवार देता है। नियमित जप आधुनिक काल का संकल्प-साधना है—उचित उच्चारण, निश्चित संख्या और स्पष्ट भाव से अटके रास्ते खुल सकते हैं। कुछ पंक्तियाँ भी, सही विधि और निरंतरता से, परिणाम बदलने में सक्षम हैं।'
+    : 'A mantra can be a small key for a big lock. Problems may look large, but the right sound in the right way reshapes mood, focus, and grace around you. Regular chanting is modern-day manifestation—the precise vibration, count, and intention can unlock stuck paths. Even a few lines, done correctly and consistently, can shift outcomes.';
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Routes — debug
 // ─────────────────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.json({ ok: true, service: 'Astro-Baba Chat API' }));
 app.get('/debug/fonts', (req, res) => res.json(checkFonts()));
@@ -260,20 +383,40 @@ app.get('/debug/version', (req, res) => res.json({
   fontsReady: FONTS_READY,
 }));
 
-// DAILY JSON — now supports optional user in body via POST too
+// ─────────────────────────────────────────────────────────────────────────────
+// DAILY JSON
+// ─────────────────────────────────────────────────────────────────────────────
 app.get('/daily', (req, res) => {
   const sign = (req.query.sign || 'aries').toString().toLowerCase();
   const lang = pickLang({ lang: req.query.lang });
   const data = composeDaily({ sign, lang });
-  res.json({ date: data.date, sign: data.sign, lang: data.lang, text: data.text, vedic: data.vedic, generatedAt: new Date().toISOString(), rich: data });
+  res.json({
+    date: data.date,
+    sign: data.sign,
+    lang: data.lang,
+    text: data.text,
+    vedic: data.vedic,
+    generatedAt: new Date().toISOString(),
+    rich: data
+  });
 });
 app.post('/daily', (req, res) => {
   const { sign='aries', lang='en', user=null } = req.body || {};
   const data = composeDaily({ sign, lang: pickLang({ lang }), user });
-  res.json({ date: data.date, sign: data.sign, lang: data.lang, text: data.text, vedic: data.vedic, generatedAt: new Date().toISOString(), rich: data });
+  res.json({
+    date: data.date,
+    sign: data.sign,
+    lang: data.lang,
+    text: data.text,
+    vedic: data.vedic,
+    generatedAt: new Date().toISOString(),
+    rich: data
+  });
 });
 
-// DAILY → PDF (hybrid)
+// ─────────────────────────────────────────────────────────────────────────────
+// DAILY → PDF
+// ─────────────────────────────────────────────────────────────────────────────
 app.post('/report/from-daily', async (req, res) => {
   try {
     const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
@@ -286,10 +429,11 @@ app.post('/report/from-daily', async (req, res) => {
 
     applyFont(doc, { lang, weight: 'regular' });
 
-    // Header (brand once; subline with name + IST stamp)
+    // Header (brand once; subline with name + IST)
     const titleLine = lang==='hi' ? 'दैनिक राशिफल' : 'Daily Horoscope';
     const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${daily.date} ${daily.timeIST}`;
-    addBrandHeader(doc, { lang, brand: { ...brand, appName: brand?.appName || 'Astro-Baba' }, titleLine, subLine });
+    const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
+    addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
     // User block
     addUserBlock(doc, { lang, user: {
@@ -297,8 +441,9 @@ app.post('/report/from-daily', async (req, res) => {
       dob:   user?.dob,  tob:   user?.time || user?.tob,       place: user?.place,
     }});
 
-    // Vedic timings
+    // Vedic timings (+ note)
     addVedicTimings(doc, { lang, timings: daily.vedic });
+    addVedicNote(doc, { lang });
 
     // Day header (EN CAPS / HI natural)
     applyFont(doc, { lang, weight: 'bold' });
@@ -376,7 +521,7 @@ app.post('/report/from-daily', async (req, res) => {
     doc.fontSize(12).text(daily.policy.thanks);
     doc.moveDown(0.2);
     applyFont(doc, { lang, weight: 'bold' });
-    doc.fontSize(12).text(lang==='hi' ? 'आपका दिन मंगलमय हो!' : 'Have a blessed day!!');
+    doc.fontSize(12).text(lang==='hi' ? BLESS.hi : BLESS.en);
     applyFont(doc, { lang });
 
     // Footer ©
@@ -391,53 +536,124 @@ app.post('/report/from-daily', async (req, res) => {
   }
 });
 
-// GENERIC PACKAGE → PDF (kept, but subline shows only name + IST)
-app.post('/report/generate', async (req, res) => {
+// ─────────────────────────────────────────────────────────────────────────────
+// GEMSTONE → PDF (hybrid; sign-safe)
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/report/gemstone', async (req, res) => {
   try {
-    const { package: pkg='gemstone', user={}, brand={}, inputs={}, lang: rawLang } = req.body || {};
+    const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
     const lang = pickLang({ lang: rawLang });
-    const now  = new Date();
-    const { dateStr, timeStr } = toISTParts(now);
-
-    // Minimal content (your existing OpenAI logic can live here)
-    const titleLine = lang==='hi' ? 'रिपोर्ट' : 'Report';
-    const intro = lang==='hi'
-      ? ['संक्षिप्त परिचय अनुच्छेद 1', 'परिचय अनुच्छेद 2']
-      : ['A short introduction paragraph one.', 'Introduction paragraph two.'];
-    const opp = ['One action', 'Second action', 'Third action'];
-    const caut= ['One caution', 'Second caution', 'Third caution'];
-    const remedy = lang==='hi' ? 'एक छोटा उपाय।' : 'A short remedy.';
+    const { dateStr, timeStr } = toISTParts(new Date());
+    const plan = gemPlanForSign(sign);
+    const planet = rulerForSign(sign);
 
     const doc = new PDFDocument({ margin: 36, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="AstroBaba_${pkg}_${dateStr}_${lang}.pdf"`);
+    res.setHeader('Content-Disposition', `attachment; filename="AstroBaba_Gemstone_${sign}_${dateStr}_${lang}.pdf"`);
 
     applyFont(doc, { lang });
 
-    const subLine = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${dateStr} ${timeStr}`;
-    addBrandHeader(doc, { lang, brand, titleLine, subLine });
+    const titleLine = lang==='hi' ? `रत्न मार्गदर्शन — ${capSign(sign)}` : `Gemstone Guidance — ${capSign(sign)}`;
+    const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${dateStr} ${timeStr}`;
+    const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
+    addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
+
     addUserBlock(doc, { lang, user: {
       name:user?.name, phone:user?.phone, email:user?.email, gender:user?.gender,
       dob:user?.dob, tob:user?.time || user?.tob, place:user?.place,
     }});
 
-    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(greeting(lang)); applyFont(doc, { lang });
-    addSection(doc, { lang, heading: lang==='hi'?'परिचय':'Introduction', paragraphs: intro });
+    // Greeting
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(greeting(lang)); applyFont(doc, { lang }); doc.moveDown(0.6);
 
-    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang==='hi'?'अवसर':'Opportunities'); applyFont(doc, { lang });
-    drawBullets(doc, opp, { lang });
+    // Planetary snapshot
+    const snapHead = lang==='hi' ? 'ग्रह संकेत (संक्षेप)' : 'Planetary Snapshot (brief)';
+    const snapPara = lang==='hi'
+      ? `आपके सूर्य राशि हेतु प्राथमिक ग्रह संकेत: ${capSign(sign)} के लिए ${planet.toUpperCase()} — ${plan.tone}.`
+      : `Primary support for your sun sign: ${capSign(sign)} leans on ${planet.toUpperCase()} — ${plan.tone}.`;
+    addSection(doc, { lang, heading: snapHead, paragraphs: [snapPara] });
 
-    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang==='hi'?'सावधानियाँ':'Cautions'); applyFont(doc, { lang });
-    drawBullets(doc, caut, { lang });
+    // Recommendations
+    const recHead = lang==='hi' ? 'मुख्य सुझाव' : 'Recommendation';
+    const lines = lang==='hi'
+      ? [
+          `प्रमुख रत्न: ${plan.primary}`,
+          `वैकल्पिक (हल्का/उप्रत्न): ${plan.alt}`,
+          `उद्देश्य: ${plan.tone}`,
+          plan?.note ? `नोट: ${plan.note}` : null
+        ].filter(Boolean)
+      : [
+          `Primary gemstone: ${plan.primary}`,
+          `Alternate (upratna/gentler): ${plan.alt}`,
+          `Planet focus: ${plan.tone}`,
+          plan?.note ? `Note: ${plan.note}` : null
+        ].filter(Boolean);
+    addSection(doc, { lang, heading: recHead, paragraphs: lines });
 
-    addSection(doc, { lang, heading: lang==='hi'?'उपाय':'Remedy', paragraphs: [remedy] });
+    // How to wear
+    const howHead = lang==='hi' ? 'कैसे पहनें' : 'How to Wear';
+    const howParas = lang==='hi'
+      ? [
+          'आरंभ: मंगलवार/शनिवार, अभिजीत मुहूर्त में।',
+          'परीक्षण अवधि: 45–60 दिन; मन की स्थिरता, ऊर्जा, ध्यान पर ध्यान दें।',
+          'धातु: सिल्वर (या पंचधातु)।',
+          'उंगली/हाथ: दाएँ हाथ की अनामिका उंगली (आम रूप से)।',
+          'वज़न: सम्मत के अनुसार; पत्थर असली रखें — पारदर्शिता आकार से अधिक महत्त्वपूर्ण।',
+          'शुद्धि: स्वच्छ जल + कच्चे दूध की कुछ बूँदें; मुलायम कपड़े से पोंछें।',
+          'ऊर्जन: दीपक जलाएँ; “ॐ क्राम क्रीम क्रौं सह भौमाय नमः” 108×; संकल्प बोलें।',
+          'पहनने के बाद 11 मिनट शांत रहें।'
+        ]
+      : [
+          'Start: Tuesday/Saturday, during Abhijit Muhurat.',
+          'Trial: 45–60 days; observe calmness, energy and focus.',
+          'Metal: Silver (or Panchdhatu).',
+          'Finger/hand: Ring finger (right) in most cases.',
+          'Weight: As advised — keep it genuine; clarity > size.',
+          'Cleansing: Clean water + a few drops of raw milk; pat dry.',
+          'Energizing: Light a diya; chant “Om Kraam Kreem Kraum Sah Bhaumaya Namah” 108×; state your Sankalpa.',
+          'After wearing, stay calm for ~11 minutes.'
+        ];
+    addSection(doc, { lang, heading: howHead, paragraphs: howParas });
 
+    // Do / Don't
+    const ddHead = lang==='hi' ? 'क्या करें / क्या न करें' : 'Do / Don’t';
+    const ddLines = lang==='hi'
+      ? [
+          'करें: यदि पत्थर टूटे/दरारे हों तो हटाएँ; असंगत रत्नों के साथ एक साथ न पहनें।',
+          'न करें: सिंथेटिक/उष्मा-उपचारित रत्नों को मिलाकर न पहनें; एलर्जी हो तो परहेज़ करें।',
+          'रखरखाव: हल्का साफ़ करें; कठोर रसायनों से बचें; मासिक ऊर्जन (मंगलवार शाम)।'
+        ]
+      : [
+          'Do: Remove if cracked/chipped; avoid wearing alongside incompatible stones.',
+          'Don’t: Mix with synthetic/heat-treated stones; avoid during metal-allergy flare-ups.',
+          'Maintenance: Gentle cleaning; avoid harsh chemicals; monthly re-energizing (Tuesday evening).'
+        ];
+    addSection(doc, { lang, heading: ddHead, paragraphs: ddLines });
+
+    // Sankalpa
+    const sankHead = lang==='hi' ? 'संकल्प (एक वाक्य)' : 'Sankalpa (intention)';
+    const sankLine = lang==='hi'
+      ? '“श्रद्धा और अनुशासन के साथ, यह रत्न मेरी ऊर्जा को स्थिर करे और सही अवसर खोले।”'
+      : '“With faith and discipline, may this stone steady my energy and open right opportunities.”';
+    addSection(doc, { lang, heading: sankHead, paragraphs: [sankLine] });
+
+    // Observation checklist
+    const obsHead = lang==='hi' ? 'अवलोकन जाँच सूची' : 'Observation checklist';
+    const obs = lang==='hi'
+      ? 'नींद ◻  ऊर्जा ◻  मनोदशा ◻  एकाग्रता ◻  वित्त ◻  संबंध ◻  स्वास्थ्य ◻'
+      : 'Sleep ◻  Energy ◻  Mood ◻  Focus ◻  Finances ◻  Relationships ◻  Health ◻';
+    addSection(doc, { lang, heading: obsHead, paragraphs: [obs] });
+
+    // Power of Gemstones (philosophy)
+    addSection(doc, { lang, heading: lang==='hi'?'रत्न की शक्ति':'Power of Gemstones', paragraphs: [powerGemText(lang)] });
+
+    // Final note + thanks + blessing
     const pol = policyAgent(lang);
     doc.moveDown(0.8);
     applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'अंतिम नोट' : 'Final Note'); applyFont(doc, { lang });
     doc.moveDown(0.2); doc.fontSize(11).text(pol.disclaimer);
     doc.moveDown(0.6); doc.fontSize(12).text(pol.thanks);
-    doc.moveDown(0.2); applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'आपका दिन मंगलमय हो!' : 'Have a blessed day!!'); applyFont(doc, { lang });
+    doc.moveDown(0.2); applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? BLESS.hi : BLESS.en); applyFont(doc, { lang });
     const year = new Date().getFullYear();
     doc.moveDown(0.8); doc.fontSize(9).fillColor('#555').text(`© ${year} ${pol.footerBrand}`, { align:'center' }); doc.fillColor('black');
 
@@ -445,18 +661,106 @@ app.post('/report/generate', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message || String(e) }); }
 });
 
-// WEEKLY → PDF (unchanged layout; cleaner subline)
+// ─────────────────────────────────────────────────────────────────────────────
+// MANTRA → PDF (hybrid; sign-safe)
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/report/mantra', async (req, res) => {
+  try {
+    const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
+    const lang    = pickLang({ lang: rawLang });
+    const { dateStr, timeStr, weekdayIndex } = toISTParts(new Date());
+    const planet  = rulerForSign(sign);
+    const seedMan = mantraForPlanet(planet);
+
+    const doc = new PDFDocument({ margin: 36, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="AstroBaba_Mantra_${sign}_${dateStr}_${lang}.pdf"`);
+
+    applyFont(doc, { lang });
+
+    const titleLine = lang==='hi' ? `मंत्र मार्गदर्शन — ${capSign(sign)}` : `Mantra Guidance — ${capSign(sign)}`;
+    const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${dateStr} ${timeStr}`;
+    const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
+    addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
+
+    addUserBlock(doc, { lang, user: {
+      name:user?.name, phone:user?.phone, email:user?.email, gender:user?.gender,
+      dob:user?.dob, tob:user?.time || user?.tob, place:user?.place,
+    }});
+
+    // Greeting
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(greeting(lang)); applyFont(doc, { lang }); doc.moveDown(0.6);
+
+    // Planetary tone
+    const toneHead = lang==='hi' ? 'ग्रह प्रवृत्ति (टोन)' : 'Planetary Tone';
+    const toneLine = lang==='hi'
+      ? `${planet.toUpperCase()} — संतुलन एवं प्रगति हेतु सहायक स्पंदन।`
+      : `${planet.toUpperCase()} — supportive vibration for balance and progress.`;
+    addSection(doc, { lang, heading: toneHead, paragraphs: [toneLine] });
+
+    // Mantra prescription
+    const manHead  = lang==='hi' ? 'मुख्य मंत्र' : 'Primary Mantra';
+    const manLine  = seedMan.seed;
+    const schedHead= lang==='hi' ? 'अनुष्ठान / नियम' : 'Practice';
+    const sched = lang==='hi'
+      ? [
+          'समय: सूर्योदय या सूर्यास्त; शांत स्थान।',
+          `गणना: ${seedMan.count}× माला (रुद्राक्ष/क्रिस्टल); स्वच्छ उच्चारण।`,
+          'आसन: सुखासन; रीढ़ सीधी; दृष्टि कोमल।',
+          'पूर्व/पश्चात: दीपक/अगरबत्ती; 1 मिनट शांत बैठना।',
+          'साप्ताहिक अनुशंसा: कम-से-कम 4 दिन नियमित।'
+        ]
+      : [
+          'Timing: Sunrise or sunset; a quiet spot.',
+          `Count: ${seedMan.count}× (rudraksha/crystal mala); clear pronunciation.`,
+          'Posture: Comfortable seat; spine tall; soft gaze.',
+          'Before/After: Light a diya/incense; sit quietly for a minute.',
+          'Weekly cadence: at least 4 days regular.'
+        ];
+    addSection(doc, { lang, heading: manHead, paragraphs: [manLine] });
+    addSection(doc, { lang, heading: schedHead, paragraphs: sched });
+
+    // Sankalpa
+    const sankHead = lang==='hi' ? 'संकल्प (एक वाक्य)' : 'Sankalpa (intention)';
+    const sankLine = lang==='hi'
+      ? '“मैं शुद्ध भाव और अनुशासन के साथ जप करता/करती हूँ; मार्ग प्रशस्त हो।”'
+      : '“I chant with pure intention and discipline; may right paths open.”';
+    addSection(doc, { lang, heading: sankHead, paragraphs: [sankLine] });
+
+    // Power of Mantra
+    addSection(doc, { lang, heading: lang==='hi'?'मंत्र की शक्ति':'Power of the Mantra', paragraphs: [powerMantraText(lang)] });
+
+    // Final note + thanks + blessing
+    const pol = policyAgent(lang);
+    doc.moveDown(0.8);
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'अंतिम नोट' : 'Final Note'); applyFont(doc, { lang });
+    doc.moveDown(0.2); doc.fontSize(11).text(pol.disclaimer);
+    doc.moveDown(0.6); doc.fontSize(12).text(pol.thanks);
+    doc.moveDown(0.2); applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? BLESS.hi : BLESS.en); applyFont(doc, { lang });
+    const year = new Date().getFullYear();
+    doc.moveDown(0.8); doc.fontSize(9).fillColor('#555').text(`© ${year} ${pol.footerBrand}`, { align:'center' }); doc.fillColor('black');
+
+    doc.pipe(res); doc.end();
+  } catch (e) { res.status(500).json({ error: e.message || String(e) }); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WEEKLY → PDF (logo/user/greeting once; each day = real DAY, DATE + Vedic)
+// ─────────────────────────────────────────────────────────────────────────────
 app.post('/report/weekly', async (req, res) => {
   try {
     const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
     const lang = pickLang({ lang: rawLang });
-    const now  = new Date();
-    const { dateStr, timeStr } = toISTParts(now);
+    const start = new Date();
+    const { dateStr, timeStr } = toISTParts(start);
 
+    // Build 7 days from the same composer with correct advancing dates
     const days = [];
+    const roll = new Date(start);
     for (let i = 0; i < 7; i++) {
-      const d = composeDaily({ sign, lang, now }); // same composer
-      days.push(d); now.setDate(now.getDate()+1);
+      const d = composeDaily({ sign, lang, now: new Date(roll) });
+      days.push({ d, dateObj: new Date(roll) });
+      roll.setDate(roll.getDate() + 1);
     }
 
     const doc = new PDFDocument({ margin: 36, bufferPages: true });
@@ -465,9 +769,12 @@ app.post('/report/weekly', async (req, res) => {
 
     applyFont(doc, { lang });
 
-    const titleLine = lang==='hi' ? 'साप्ताहिक राशिफल (आज + 6)' : 'Weekly Horoscope (Today + 6)';
+    const titleLine = lang==='hi' ? 'साप्ताहिक राशिफल' : 'Weekly Horoscope';
     const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${dateStr} ${timeStr}`;
-    addBrandHeader(doc, { lang, brand, titleLine, subLine });
+    const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
+    addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
+
+    // One-time user block + one-time greeting
     addUserBlock(doc, { lang, user: {
       name:user?.name, phone:user?.phone, email:user?.email, gender:user?.gender,
       dob:user?.dob, tob:user?.time || user?.tob, place:user?.place,
@@ -478,20 +785,40 @@ app.post('/report/weekly', async (req, res) => {
     applyFont(doc, { lang });
     doc.moveDown(0.6);
 
-    days.forEach((d, idx) => {
-      const head = lang==='hi' ? `दिन ${idx+1}` : `Day ${idx+1}`;
-      addSection(doc, { lang, heading: head, paragraphs: [] });
-      const paras = [d.themeLead, d.luckyLine, '', ...(d.sections.opportunities.map(o=>`• ${o}`)), '', ...(d.sections.cautions.map(c=>`• ${c}`)), '', `Remedy: ${d.sections.remedy}`];
+    // Each day: real DAY, DATE + that day's Vedic timings (12h approximation)
+    days.forEach(({ d, dateObj }, idx) => {
+      addSection(doc, { lang, heading: d.header.dayHeader, paragraphs: [] });
+
+      // Vedic timings for that weekday (approx) — shown inline per day
+      const wk = dateObj.getDay(); // 0..6
+      const vt = approxVedicSlots12h(wk);
+      addVedicTimings(doc, { lang, timings: vt });
+
+      const paras = [
+        d.themeLead,
+        d.luckyLine,
+        '',
+        ...(d.sections.opportunities.map(o=>`• ${o}`)),
+        '',
+        ...(d.sections.cautions.map(c=>`• ${c}`)),
+        '',
+        (lang==='hi' ? 'उपाय: ' : 'Remedy: ') + d.sections.remedy
+      ];
+
       paras.forEach(p => doc.fontSize(12).text(cleanText(p), { paragraphGap: 6, align: 'justify' }));
       doc.moveDown(0.4);
     });
 
+    // One-time Vedic note at the end (applies to all 7 tables)
+    addVedicNote(doc, { lang });
+
+    // Final note + thanks + blessing (once)
     const pol = policyAgent(lang);
     doc.moveDown(0.8);
     applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'अंतिम नोट' : 'Final Note'); applyFont(doc, { lang });
     doc.moveDown(0.2); doc.fontSize(11).text(pol.disclaimer);
     doc.moveDown(0.6); doc.fontSize(12).text(pol.thanks);
-    doc.moveDown(0.2); applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'आपका दिन मंगलमय हो!' : 'Have a blessed day!!'); applyFont(doc, { lang });
+    doc.moveDown(0.2); applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? BLESS.hi : BLESS.en); applyFont(doc, { lang });
     const year = new Date().getFullYear();
     doc.moveDown(0.8); doc.fontSize(9).fillColor('#555').text(`© ${year} ${pol.footerBrand}`, { align:'center' }); doc.fillColor('black');
 

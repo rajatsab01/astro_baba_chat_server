@@ -1,0 +1,8 @@
+$bytes  = [IO.File]::ReadAllBytes("C:\flutter_projects\astro_baba\astro_app\astro_baba_new\astro_baba_fresh\assets\images\app_icon.png")
+$b64    = [Convert]::ToBase64String($bytes)
+@"
+{
+  "appName": "Astro-Baba",
+  "logoBase64": "$b64"
+}
+"@ | Set-Content -Path brand.json -Encoding UTF8

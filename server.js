@@ -661,6 +661,112 @@ app.post('/report/gemstone', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message || String(e) }); }
 });
 
+// GENERIC PACKAGE → PDF (Gemstone / Mantra etc.)
+// Uses existing helpers: pickLang, toISTParts, applyFont, ensureBrandWithLogo,
+// addBrandHeader, addUserBlock, addSection, drawBullets, greeting, policyAgent.
+app.post('/report/generate', async (req, res) => {
+  try {
+    const { package: pkg = 'gemstone', user = {}, brand = {}, lang: rawLang } = req.body || {};
+    const lang = pickLang({ lang: rawLang });
+    const now  = new Date();
+    const { dateStr, timeStr } = toISTParts(now);
+
+    // Minimal sample content (you can swap in your Gemstone/Mantra composer later)
+    const titleLine = lang === 'hi'
+      ? (pkg === 'mantra' ? 'मंत्र रिपोर्ट' : 'रत्न रिपोर्ट')
+      : (pkg === 'mantra' ? 'Mantra Report' : 'Gemstone Report');
+
+    const intro = lang === 'hi'
+      ? [
+          'यह संक्षिप्त, व्यावहारिक मार्गदर्शिका है — सरल कदमों में पालन करें।',
+          'पहले 45–60 दिनों तक नियमितता बनाए रखें और अनुभव दर्ज करें।'
+        ]
+      : [
+          'This is a concise, practical guide — follow in simple steps.',
+          'Maintain regularity for 45–60 days and track observations.'
+        ];
+
+    const opp = lang === 'hi'
+      ? ['आज एक छोटा लेकिन स्पष्ट कदम उठाएँ।', 'सही समय/उंगली/धातु पर ध्यान दें।', 'साप्ताहिक नोट्स बनाएं — ऊर्जा/मूड/नींद।']
+      : ['Take one small, clear step today.', 'Mind the correct time/finger/metal.', 'Keep weekly notes: energy/mood/sleep.'];
+
+    const caut = lang === 'hi'
+      ? ['अत्यधिक अपेक्षाओं से बचें — क्रमिक प्रगति सर्वोत्तम है।', 'कृत्रिम/हीट-ट्रीटेड से बचें।', 'एलर्जी/चोट की स्थिति में विराम लें।']
+      : ['Avoid over-expectation — steady progress is best.', 'Avoid synthetic/heat-treated pieces.', 'Pause in case of allergy/injury.'];
+
+    const remedy = lang === 'hi'
+      ? 'शाम को दीपक जलाएँ, 11 बार जप करें और 2 मिनट शांति रखें।'
+      : 'In the evening, light a diya, chant 11×, and sit calmly for 2 minutes.';
+
+    const doc = new PDFDocument({ margin: 36, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="AstroBaba_${pkg}_${dateStr}_${lang}.pdf"`
+    );
+
+    applyFont(doc, { lang });
+
+    const subLine = `${(user?.name || (lang === 'hi' ? 'मित्र' : 'Friend'))} • ${dateStr} ${timeStr}`;
+    const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
+    addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
+
+    addUserBlock(doc, {
+      lang,
+      user: {
+        name: user?.name,
+        phone: user?.phone,
+        email: user?.email,
+        gender: user?.gender,
+        dob: user?.dob,
+        tob: user?.time || user?.tob,
+        place: user?.place
+      }
+    });
+
+    // Greeting
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(12).text(greeting(lang));
+    applyFont(doc, { lang });
+    doc.moveDown(0.6);
+
+    // Intro
+    addSection(doc, { lang, heading: lang === 'hi' ? 'परिचय' : 'Introduction', paragraphs: intro });
+
+    // Opportunities / Cautions
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang === 'hi' ? 'अवसर' : 'Opportunities'); applyFont(doc, { lang });
+    drawBullets(doc, opp, { lang }); doc.moveDown(0.4);
+
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang === 'hi' ? 'सावधानियाँ' : 'Cautions'); applyFont(doc, { lang });
+    drawBullets(doc, caut, { lang }); doc.moveDown(0.4);
+
+    // Practice / Remedy
+    addSection(doc, { lang, heading: lang === 'hi' ? 'अभ्यास/उपाय' : 'Practice / Remedy', paragraphs: [remedy] });
+
+    // Standard blessing line (bold look via Unicode bold characters)
+    doc.moveDown(0.8);
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(12).text(
+      lang === 'hi'
+        ? '𝗛𝗮𝘃𝗲 𝗮 𝗯𝗹𝗲𝘀𝘀𝗲𝗱 𝗱𝗮𝘆!! 𝗪𝗲 𝘄𝗶𝘀𝗵 𝘆𝗼𝘂 𝗮 𝘃𝗲𝗿𝘆 𝗰𝗵𝗲𝗲𝗿𝗳𝘂𝗹, 𝗽𝗿𝗼𝘀𝗽𝗲𝗿𝗼𝘂𝘀 𝗮𝗻𝗱 𝘄𝗼𝗻𝗱𝗲𝗿𝗳𝘂𝗹 𝗱𝗮𝘆 𝗮𝗵𝗲𝗮𝗱 𝘄𝗶𝘁𝗵 𝗹𝗼𝘁𝘀 𝗼𝗳 𝗯𝗹𝗲𝘀𝘀𝗶𝗻𝗴𝘀...'
+        : '𝗛𝗮𝘃𝗲 𝗮 𝗯𝗹𝗲𝘀𝘀𝗲𝗱 𝗱𝗮𝘆!! 𝗪𝗲 𝘄𝗶𝘀𝗵 𝘆𝗼𝘂 𝗮 𝘃𝗲𝗿𝘆 𝗰𝗵𝗲𝗲𝗿𝗳𝘂𝗹, 𝗽𝗿𝗼𝘀𝗽𝗲𝗿𝗼𝘂𝘀 𝗮𝗻𝗱 𝘄𝗼𝗻𝗱𝗲𝗿𝗳𝘂𝗹 𝗱𝗮𝘆 𝗮𝗵𝗲𝗮𝗱 𝘄𝗶𝘁𝗵 𝗹𝗼𝘁𝘀 𝗼𝗳 𝗯𝗹𝗲𝘀𝘀𝗶𝗻𝗴𝘀...'
+    );
+    applyFont(doc, { lang });
+
+    // Footer ©
+    const pol = policyAgent(lang);
+    doc.moveDown(0.6);
+    const year = new Date().getFullYear();
+    doc.fontSize(9).fillColor('#555').text(`© ${year} ${pol.footerBrand}`, { align: 'center' });
+    doc.fillColor('black');
+
+    doc.pipe(res);
+    doc.end();
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MANTRA → PDF (hybrid; sign-safe)
 // ─────────────────────────────────────────────────────────────────────────────

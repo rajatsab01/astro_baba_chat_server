@@ -113,6 +113,13 @@ function cleanHi(s) {
   // phrase-level first
   out = out.replace(/परफेक्ट.*गुड.*वर्जन.*वन/gi, 'पूर्णता के लालच में अच्छे को मत मारें — संस्करण 1 जारी करें।');
   out = out.replace(/स्थिर\s*बीट्स\s*चमकीले/gi, 'स्थिरता दिखावे से बेहतर');
+
+  // common OCR/ligature glitches
+  out = out.replace(/ईर्मेल/g, 'ईमेल');
+  out = out.replace(/ईर्मानदार/g, 'ईमानदार');
+  out = out.replace(/गमर्जोशी/g, 'गर्मजोशी');
+  out = out.replace(/कायर्/g, 'कार्य');
+  out = out.replace(/समयसीमाआें/g, 'समयसीमाओं');
   
   // extra cleanups
   out = out.replace(/बीट्स\s*चमक(दार|ीले)/gi, 'दिखावे से बेहतर');

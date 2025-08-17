@@ -19,6 +19,21 @@ import { varietyAgent } from './agents/variety.js';
 import { translateAgent } from './agents/translate.js';
 import { greeting, formatAgent } from './agents/format.js';
 
+// ⬇️ ⬇️ INSTANTIATE APP RIGHT AFTER IMPORTS ⬇️ ⬇️
+const app  = express();
+const PORT = process.env.PORT || 10000;
+const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
+
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
+
+// (everything else below: agents, fonts, helpers, routes…)
+
+
 const BUILD = '2025-08-17.03';
 
 app.use((req, res, next) => {
@@ -177,20 +192,6 @@ function getVedicNames(lang = 'en') {
     abhijitMuhurat: 'Abhijit Muhurat',
   };
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// App / ENV
-// ─────────────────────────────────────────────────────────────────────────────
-const app  = express();
-const PORT = process.env.PORT || 10000;
-const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
-
-app.use(cors());
-app.use(express.json({ limit: '1mb' }));
-app.use((req, res, next) => {
-  res.setHeader('Cache-Control', 'no-store');
-  next();
-});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Small utils + TRANSLATION HELPERS

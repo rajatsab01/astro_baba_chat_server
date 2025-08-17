@@ -979,15 +979,22 @@ app.post('/report/mantra', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WEEKLY → PDF (await per-day compose)  **FIXED AWAIT HERE**
+// WEEKLY → PDF (await per-day compose)  **FORCE FULL HINDI + सही समय फॉर्मेट**
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/report/weekly', async (req, res) => {
   try {
     const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
     const lang = pickLang({ lang: rawLang }, req.headers);
     const start = new Date();
-    const { dateStr, timeStr } = toISTParts(start);
 
+    // Use proper IST time text: "HH:mm बजे" for HI, "HH:mm IST" for EN
+    const { ist, dateStr } = toISTParts(start);
+    const subLineTime =
+      ist.toLocaleTimeString(lang === 'hi' ? 'hi-IN' : 'en-GB', {
+        hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata'
+      }) + (lang === 'hi' ? ' बजे' : ' IST');
+
+    // Compose 7 days (awaited) — same sign/lang, rolling date
     const days = [];
     const roll = new Date(start);
     for (let i = 0; i < 7; i++) {
@@ -995,39 +1002,70 @@ app.post('/report/weekly', async (req, res) => {
       days.push({ d, dateObj: new Date(roll) });
       roll.setDate(roll.getDate() + 1);
     }
+
     const doc = new PDFDocument({ margin: 36, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="AstroBaba_Weekly_${sign}_${dateStr}_${lang}.pdf"`);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="AstroBaba_Weekly_${sign}_${dateStr}_${lang}.pdf"`
+    );
 
     applyFont(doc, { lang });
 
     const titleLine = lang==='hi' ? 'साप्ताहिक राशिफल' : 'Weekly Horoscope';
-    const subLine   = `${dateStr} ${timeStr}`;
+    const subLine   = `${dateStr} ${subLineTime}`;
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
-    addUserBlock(doc, { lang, user: {
-      name:user?.name, phone:user?.phone, email:user?.email, gender:user?.gender,
-      dob:user?.dob, tob:user?.time || user?.tob, place:user?.place,
-    }});
+    addUserBlock(doc, {
+      lang,
+      user: {
+        name:  user?.name,  phone: user?.phone, email: user?.email, gender: user?.gender,
+        dob:   user?.dob,   tob:   user?.time || user?.tob,        place:  user?.place,
+      },
+    });
 
     applyFont(doc, { lang, weight: 'bold' });
     doc.fontSize(12).text(greeting(lang));
     applyFont(doc, { lang });
     doc.moveDown(0.6);
 
+    // Helper: final-pass translation & cleanup for Hindi
+    const forceHi = async (arr) => {
+      if (lang !== 'hi') return arr;
+      const out = [];
+      for (const s of arr) {
+        const tr = await txOne('hi', String(s));
+        out.push(cleanHi(tr));
+      }
+      return out;
+    };
+
     for (const { d, dateObj } of days) {
       addSection(doc, { lang, heading: d.header.dayHeader, paragraphs: [] });
+
       const wk = dateObj.getDay();
       const vt = approxVedicSlots12h(wk);
       addVedicTimings(doc, { lang, timings: vt });
+
+      // Build paragraph list for the day
       const paras = [
-        d.themeLead, d.luckyLine, '',
-        ...(d.sections.opportunities.map(o=>`• ${o}`)), '',
-        ...(d.sections.cautions.map(c=>`• ${c}`)), '',
-        (lang==='hi' ? 'उपाय: ' : 'Remedy: ') + d.sections.remedy
+        d.themeLead,
+        d.luckyLine,
+        '',
+        ...d.sections.opportunities.map(o => `• ${o}`),
+        '',
+        ...d.sections.cautions.map(c => `• ${c}`),
+        '',
+        (lang==='hi' ? 'उपाय: ' : 'Remedy: ') + d.sections.remedy,
       ];
-      paras.forEach(p => doc.fontSize(12).text(cleanText(p), { paragraphGap: 6, align: 'justify' }));
+
+      // *** Critical: force-translate every line again for Hindi ***
+      const finalParas = await forceHi(paras);
+
+      finalParas.forEach(p => {
+        doc.fontSize(12).text(cleanText(p), { paragraphGap: 6, align: 'justify' });
+      });
       doc.moveDown(0.4);
     }
 
@@ -1035,15 +1073,27 @@ app.post('/report/weekly', async (req, res) => {
 
     const pol = policyAgent(lang);
     doc.moveDown(0.8);
-    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'अंतिम नोट' : 'Final Note'); applyFont(doc, { lang });
-    doc.moveDown(0.2); doc.fontSize(11).text(pol.disclaimer);
-    doc.moveDown(0.6); doc.fontSize(12).text(pol.thanks);
-    doc.moveDown(0.2); applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? BLESS.hi : BLESS.en); applyFont(doc, { lang });
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(12).text(lang==='hi' ? 'अंतिम नोट' : 'Final Note');
+    applyFont(doc, { lang });
+    doc.moveDown(0.2);
+    doc.fontSize(11).text(pol.disclaimer);
+    doc.moveDown(0.6);
+    doc.fontSize(12).text(pol.thanks);
+    doc.moveDown(0.2);
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(12).text(lang==='hi' ? BLESS.hi : BLESS.en);
+    applyFont(doc, { lang });
+
     const year = new Date().getFullYear();
-    doc.moveDown(0.8); doc.fontSize(9).fillColor('#555').text(`© ${year} ${pol.footerBrand}`, { align:'center' }); doc.fillColor('black');
+    doc.moveDown(0.8);
+    doc.fontSize(9).fillColor('#555').text(`© ${year} ${pol.footerBrand}`, { align: 'center' });
+    doc.fillColor('black');
 
     doc.pipe(res); doc.end();
-  } catch (e) { res.status(500).json({ error: e.message || String(e) }); }
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

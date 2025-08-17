@@ -110,45 +110,59 @@ function cleanHi(s) {
   if (!s) return s;
   let out = String(s);
 
-  // phrase-level first
-  out = out.replace(/परफेक्ट.*गुड.*वर्जन.*वन/gi, 'पूर्णता के लालच में अच्छे को मत मारें — संस्करण 1 जारी करें।');
-  out = out.replace(/स्थिर\s*बीट्स\s*चमकीले/gi, 'स्थिरता दिखावे से बेहतर');
+  // OCR/ligature glitches
+  out = out.replace(/ईर्मेल/g, 'ईमेल')
+           .replace(/ईर्मानदार/g, 'ईमानदार')
+           .replace(/गमर्जोशी/g, 'गर्मजोशी')
+           .replace(/कायर्/g, 'कार्य')
+           .replace(/समयसीमाआें/g, 'समयसीमाओं');
 
-  // common OCR/ligature glitches
-  out = out.replace(/ईर्मेल/g, 'ईमेल');
-  out = out.replace(/ईर्मानदार/g, 'ईमानदार');
-  out = out.replace(/गमर्जोशी/g, 'गर्मजोशी');
-  out = out.replace(/कायर्/g, 'कार्य');
-  out = out.replace(/समयसीमाआें/g, 'समयसीमाओं');
-  
-  // extra cleanups
-  out = out.replace(/बीट्स\s*चमक(दार|ीले)/gi, 'दिखावे से बेहतर');
-  out = out.replace(/ग्राउंड\s*और\s*दीप्ति/gi, 'स्थिरता और दीप्ति');
+  // Weekly phrase-level normalizations
+  out = out.replace(/Stewardship\s*&\s*Savings/gi, 'संरक्षण और बचत')
+           .replace(/tighten one small leak/gi, 'एक छोटी रिसाव बंद करें')
+           .replace(/Creative\s*Spark/gi, 'रचनात्मक चिंगारी')
+           .replace(/test a playful idea quickly/gi, 'एक खिलंदड़े विचार को जल्दी परखें')
+           .replace(/Relationship\s*Warmth/gi, 'संबंधों में ऊष्मा')
+           .replace(/short honest (conversations?|बातचीत)s? go far/gi, 'छोटी ईमानदार बातचीत बहुत असर करती है')
+           .replace(/Pragmatic\s*Care/gi, 'व्यावहारिक देखभाल')
+           .replace(/body,\s*sleep,\s*budgeting,\s*tiny wins/gi, 'शरीर, नींद, बजट, छोटे-छोटे जीत')
+           .replace(/Learn one micro[- ]skill you[’']?ll reuse this week/gi, 'एक सूक्ष्म कौशल सीखें जिसे आप इस सप्ताह फिर उपयोग करेंगे')
+           .replace(/Journal one page to clear mental fog/gi, 'मानसिक धुंध हटाने के लिए एक पृष्ठ जर्नल लिखें')
+           .replace(/Skip unplanned purchases sparked by mood/gi, 'मूड में की गई अनियोजित खरीद से बचें')
+           .replace(/Limit multitasking during crucial work/gi, 'महत्वपूर्ण काम के दौरान मल्टीटास्किंग सीमित रखें')
+           .replace(/Don[’']?t overfill the calendar\s*[—–-]\s*leave white space/gi, 'कैलेंडर मत ठूँसें — थोड़ा खाली समय छोड़ें')
+           .replace(/let perfect kill good\s*[—–-]\s*ship version (one|1)/gi, 'पूर्णता के लालच में अच्छे को मत मारें — संस्करण 1 जारी करें')
+           .replace(/Before work, chant “?Om Gam Ganapataye”?\s*21× for obstacle clearing/gi, 'कार्य से पहले “ॐ गं गणपतये” 21 बार जप करें — विघ्न शमन हेतु')
+           .replace(/At sunset, read a few names from Vishnu Sahasranama; offer chana dal\s*&\s*turmeric/gi, 'सूर्यास्त पर विष्णु सहस्रनाम के कुछ नाम पढ़ें; चना दाल और हल्दी अर्पित करें')
+           .replace(/Light a (pleasant )?fragrance; recite Sri Suktam or express gratitude for sufficiency/gi, 'सुगंधित धूप/दीप जलाएँ; श्री सूक्त का पाठ करें या पर्याप्तता के लिए कृतज्ञता व्यक्त करें')
+           .replace(/Ship one starter task before lunch to unlock afternoon flow/gi, 'दोपहर भोजन से पहले एक प्रारंभिक काम पूरा करें ताकि दोपहर का प्रवाह खुले')
+           .replace(/At sunrise, face east and offer gratitude to the Sun; keep 2 minutes of stillness/gi, 'सूर्योदय पर पूर्वमुख होकर सूर्य को कृतज्ञता अर्पित करें; 2 मिनट शांत बैठें')
+           .replace(/Avoid promising timelines you haven[’']?t pressure-tested/gi, 'जिन समयसीमाओं का परीक्षण नहीं किया है, उनका वादा न करें')
+           .replace(/Beware emotional emails; sleep on them/gi, 'भावनात्मक ईमेल पर तुरंत जवाब न दें; पहले ठहरें/रात भर सोचें')
+           .replace(/Don[’']?t accept every request\s*[—–-]\s*protect a 2-hour deep-work block/gi, 'हर अनुरोध न मानें — 2 घंटे का गहन-कार्य खंड सुरक्षित रखें')
+           .replace(/late-?night screens/gi, 'रात देर तक स्क्रीन');
 
-  // “ship version 1” that became “जहाज संस्करण 1”
-  out = out.replace(/(जहाज़|जहाज|शिप)\s*संस्करण\s*1/gi, 'संस्करण 1 जारी करें');
-
-  // prefer “पूर्णता”
-  out = out.replace(/संपूर्णता/gi, 'पूर्णता');
-
-  // “अच्छाई को” → “अच्छे को”
-  out = out.replace(/अच्छाई\s*को/gi, 'अच्छे को');
-
-  // inbox “trim” → “साफ़/छाँटें”
-  out = out.replace(/इनबॉक्स\s*ट्रिम/gi, 'इनबॉक्स साफ़ करें');
-  out = out.replace(/ट्रिम/gi, 'छाँटें');
-
-  // word-level
-  out = out.replace(/परफेक्ट/gi, 'पूर्णता');
-  out = out.replace(/\bगुड\b/gi, 'अच्छा');
-  out = out.replace(/शिप/gi, 'जारी करें');
-  out = out.replace(/वर्जन\s*वन/gi, 'संस्करण 1');
-  out = out.replace(/माइक्रो[- ]स्किल/gi, 'सूक्ष्म कौशल');
-  out = out.replace(/ग्राउंड/gi, 'स्थिर');
-  out = out.replace(/ग्लो/gi, 'दीप्ति');
+  // Older fixes & word-level Hinglish → Hindi
+  out = out.replace(/परफेक्ट.*गुड.*वर्जन.*वन/gi, 'पूर्णता के लालच में अच्छे को मत मारें — संस्करण 1 जारी करें।')
+           .replace(/स्थिर\s*बीट्स\s*चमकीले/gi, 'स्थिरता दिखावे से बेहतर')
+           .replace(/बीट्स\s*चमक(दार|ीले)/gi, 'दिखावे से बेहतर')
+           .replace(/ग्राउंड\s*और\s*दीप्ति/gi, 'स्थिरता और दीप्ति')
+           .replace(/(जहाज़|जहाज|शिप)\s*संस्करण\s*1/gi, 'संस्करण 1 जारी करें')
+           .replace(/संपूर्णता/gi, 'पूर्णता')
+           .replace(/अच्छाई\s*को/gi, 'अच्छे को')
+           .replace(/इनबॉक्स\s*ट्रिम/gi, 'इनबॉक्स साफ़ करें')
+           .replace(/ट्रिम/gi, 'छाँटें')
+           .replace(/परफेक्ट/gi, 'पूर्णता')
+           .replace(/\bगुड\b/gi, 'अच्छा')
+           .replace(/शिप/gi, 'जारी करें')
+           .replace(/वर्जन\s*वन/gi, 'संस्करण 1')
+           .replace(/माइक्रो[- ]स्किल/gi, 'सूक्ष्म कौशल')
+           .replace(/ग्राउंड/gi, 'स्थिर')
+           .replace(/ग्लो/gi, 'दीप्ति');
 
   return out;
 }
+
 function cleanHiList(arr) { return (arr || []).map(cleanHi); }
 async function localizeDailyStruct(d, lang) {
   if (lang !== 'hi') return d;

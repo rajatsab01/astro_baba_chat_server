@@ -14,3 +14,4 @@ out.pdf
 
 # Misc local folders accidentally created
 npm/
+.github/ 

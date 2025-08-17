@@ -613,7 +613,7 @@ app.post('/report/from-daily', async (req, res) => {
     applyFont(doc, { lang, weight: 'regular' });
 
     const titleLine = lang==='hi' ? 'दैनिक राशिफल' : 'Daily Horoscope';
-    const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${daily.date} ${daily.timeIST}`;
+    const subLine   = `${daily.date} ${daily.timeIST}`;
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
@@ -775,7 +775,7 @@ app.post('/report/gemstone', async (req, res) => {
     const titleLine = lang==='hi'
       ? `रत्न मार्गदर्शन — ${signDisplay(sign, 'hi')}`
       : `Gemstone Guidance — ${capSign(sign)}`;    
-    const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${dateStr} ${timeStr}`;
+    const subLine   = `${dateStr} ${timeStr}`;
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
@@ -867,7 +867,7 @@ app.post('/report/generate', async (req, res) => {
 
     applyFont(doc, { lang });
 
-    const subLine = `${(user?.name || (lang === 'hi' ? 'मित्र' : 'Friend'))} • ${dateStr} ${timeStr}`;
+    const subLine = `${dateStr} ${timeStr}`;
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
@@ -922,7 +922,7 @@ app.post('/report/mantra', async (req, res) => {
     const titleLine = lang==='hi'
          ? `मंत्र मार्गदर्शन — ${signDisplay(sign, 'hi')}`
          : `Mantra Guidance — ${capSign(sign)}`;
-    const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${dateStr} ${timeStr}`;
+    const subLine   = `${dateStr} ${timeStr}`;
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
@@ -994,7 +994,7 @@ app.post('/report/weekly', async (req, res) => {
     applyFont(doc, { lang });
 
     const titleLine = lang==='hi' ? 'साप्ताहिक राशिफल' : 'Weekly Horoscope';
-    const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${dateStr} ${timeStr}`;
+    const subLine   = `${dateStr} ${timeStr}`;
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
@@ -1135,7 +1135,7 @@ app.post('/report/yearly', async (req, res) => {
     const titleLine = lang === 'hi'
       ? `वार्षिक राशिफल — ${signDisplay(s, 'hi')}`
       : `Yearly Horoscope — ${capSign(s)}`;
-    const subLine = `${user?.name || (lang === 'hi' ? 'मित्र' : 'Friend')} • ${dateStr} ${timeStr}`;
+    const subLine = `${dateStr} ${timeStr}`;
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 

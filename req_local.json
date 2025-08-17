@@ -1,0 +1,7 @@
+@'
+{
+  "sign": "aries",
+  "lang": "en",
+  "user": { "name": "Raj" }
+}
+'@ | Set-Content -Path req_local.json -Encoding UTF8

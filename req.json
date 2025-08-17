@@ -1,0 +1,13 @@
+﻿{
+  "sign":"leo",
+  "lang":"en",
+  "user":{
+    "name":"Raj",
+    "phone":"+91xxxx",
+    "gender":"Male",
+    "dob":"1993-05-03",
+    "time":"10:20",
+    "place":"Delhi"
+  },
+  "brand":{"appName":"Astro-Baba"}
+}

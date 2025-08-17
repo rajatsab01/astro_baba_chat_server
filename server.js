@@ -7,6 +7,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 // agents (unchanged external files)
+import contentBank from './agents/contentBank.js';
 import { hashCode, toISTParts, cleanText, capSign } from './agents/utils.js';
 import { policyAgent } from './agents/policy.js';
 import { dayDeityAgent } from './agents/dayDeity.js';
@@ -17,6 +18,28 @@ import { panchangAgent } from './agents/panchang.js';
 import { varietyAgent } from './agents/variety.js';
 import { translateAgent } from './agents/translate.js';
 import { greeting, formatAgent } from './agents/format.js';
+
+const BUILD = '2025-08-17.03';
+
+app.use((req, res, next) => {
+  res.setHeader('X-AB-Build', BUILD);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  next();
+});
+
+// ── NEW: try to import yearly & family agents (ESM/CJS safe) ────────────────
+let getYearlyForUser = null;
+let buildFamilySections = null;
+try {
+  const yearlyAgentMod = await import('./agents/yearlyAgent.js');
+  getYearlyForUser = yearlyAgentMod?.getYearlyForUser || yearlyAgentMod?.default?.getYearlyForUser || null;
+} catch {}
+try {
+  const familyAgentMod = await import('./agents/familyAgent.js');
+  buildFamilySections = familyAgentMod?.buildFamilySections || familyAgentMod?.default?.buildFamilySections || null;
+} catch {}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Paths / Fonts
@@ -46,6 +69,115 @@ function checkFonts() {
 }
 const { ready: FONTS_READY } = checkFonts();
 
+// ── Translation helpers (best-effort, safe no-ops if agent missing) ─────────
+async function toLang(text, lang) {
+  if (!text || lang !== 'hi') return text;
+  try {
+    if (typeof translateAgent === 'function') {
+      return await translateAgent(text, 'hi');
+    }
+    if (translateAgent && typeof translateAgent.translate === 'function') {
+      return await translateAgent.translate(text, 'hi');
+    }
+  } catch {}
+  return text;
+}
+async function toLangList(arr, lang) {
+  if (!Array.isArray(arr) || lang !== 'hi') return arr || [];
+  const out = [];
+  for (const t of arr) out.push(await toLang(t, 'hi'));
+  return out;
+}
+
+// Translate a composeDaily() payload deeply where agents may be EN-only
+// --- Post-translate cleanup for Hindi (replace common Hinglish/English) ---
+function cleanHi(s) {
+  if (!s) return s;
+  let out = String(s);
+
+  // phrase-level first
+  out = out.replace(/परफेक्ट.*गुड.*वर्जन.*वन/gi, 'पूर्णता के लालच में अच्छे को मत मारें — संस्करण 1 जारी करें।');
+  out = out.replace(/स्थिर\s*बीट्स\s*चमकीले/gi, 'स्थिरता दिखावे से बेहतर');
+  
+  // extra cleanups
+  out = out.replace(/बीट्स\s*चमक(दार|ीले)/gi, 'दिखावे से बेहतर');
+  out = out.replace(/ग्राउंड\s*और\s*दीप्ति/gi, 'स्थिरता और दीप्ति');
+
+  // “ship version 1” that became “जहाज संस्करण 1”
+  out = out.replace(/(जहाज़|जहाज|शिप)\s*संस्करण\s*1/gi, 'संस्करण 1 जारी करें');
+
+  // prefer “पूर्णता”
+  out = out.replace(/संपूर्णता/gi, 'पूर्णता');
+
+  // “अच्छाई को” → “अच्छे को”
+  out = out.replace(/अच्छाई\s*को/gi, 'अच्छे को');
+
+  // inbox “trim” → “साफ़/छाँटें”
+  out = out.replace(/इनबॉक्स\s*ट्रिम/gi, 'इनबॉक्स साफ़ करें');
+  out = out.replace(/ट्रिम/gi, 'छाँटें');
+
+  // word-level
+  out = out.replace(/परफेक्ट/gi, 'पूर्णता');
+  out = out.replace(/\bगुड\b/gi, 'अच्छा');
+  out = out.replace(/शिप/gi, 'जारी करें');
+  out = out.replace(/वर्जन\s*वन/gi, 'संस्करण 1');
+  out = out.replace(/माइक्रो[- ]स्किल/gi, 'सूक्ष्म कौशल');
+  out = out.replace(/ग्राउंड/gi, 'स्थिर');
+  out = out.replace(/ग्लो/gi, 'दीप्ति');
+
+  return out;
+}
+function cleanHiList(arr) { return (arr || []).map(cleanHi); }
+async function localizeDailyStruct(d, lang) {
+  if (lang !== 'hi') return d;
+  const copy = JSON.parse(JSON.stringify(d));
+  if (copy.deityLine) {
+    copy.deityLine.pre  = await toLang(copy.deityLine.pre,  'hi');
+    copy.deityLine.bold = await toLang(copy.deityLine.bold, 'hi');
+    copy.deityLine.post = await toLang(copy.deityLine.post, 'hi');
+  }
+  copy.quote        = await toLang(copy.quote,        'hi');
+  copy.affirmation  = await toLang(copy.affirmation,  'hi');
+  copy.themeLead    = await toLang(copy.themeLead,    'hi');
+  copy.luckyLine    = await toLang(copy.luckyLine,    'hi');
+
+  if (copy.sections) {
+    copy.sections.opportunities = await toLangList(copy.sections.opportunities, 'hi');
+    copy.sections.cautions      = await toLangList(copy.sections.cautions, 'hi');
+    copy.sections.remedy        = await toLang(copy.sections.remedy, 'hi');
+  }
+  return copy;
+}
+
+// ── Zodiac display helper ─────────────────────────────────────────────────────
+const ZODIAC_HI = {
+  aries: 'मेष', taurus: 'वृषभ', gemini: 'मिथुन', cancer: 'कर्क',
+  leo: 'सिंह', virgo: 'कन्या', libra: 'तुला', scorpio: 'वृश्चिक',
+  sagittarius: 'धनु', capricorn: 'मकर', aquarius: 'कुंभ', pisces: 'मीन'
+};
+function signDisplay(sign, lang = 'en') {
+  const s = String(sign || '').toLowerCase();
+  return lang === 'hi' ? (ZODIAC_HI[s] || capSign(s)) : capSign(s);
+}
+
+// Localized Vedic labels for UI (JSON helpers)
+function getVedicNames(lang = 'en') {
+  if (lang === 'hi') {
+    return {
+      rahuKaal: 'राहु काल',
+      yamaganda: 'यमगण्ड',
+      gulikaKaal: 'गुलिक काल',
+      abhijitMuhurat: 'अभिजीत मुहूर्त',
+    };
+  }
+  return {
+    rahuKaal: 'Rahu Kaal',
+    yamaganda: 'Yamaganda',
+    gulikaKaal: 'Gulika Kaal',
+    abhijitMuhurat: 'Abhijit Muhurat',
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // App / ENV
 // ─────────────────────────────────────────────────────────────────────────────
@@ -55,24 +187,55 @@ const OPENAI_API_KEY = (process.env.OPENAI_API_KEY || '').trim();
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+app.use((req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Small utils
+// Small utils + TRANSLATION HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 function maskKey(k) {
   if (!k) return '(none)';
   if (k.length < 10) return k;
   return `${k.slice(0, 8)}...${k.slice(-4)}`;
 }
-function pickLang(source = {}) {
-  const l = (source?.lang || 'en').toString().toLowerCase();
-  return l === 'hi' ? 'hi' : 'en';
+function pickLang(source = {}, headers = {}) {
+  const direct = (source?.lang || '').toString().toLowerCase();
+  if (direct) return direct.startsWith('hi') ? 'hi' : 'en';
+
+  const x = (headers['x-lang'] || '').toString().toLowerCase();
+  if (x) return x.startsWith('hi') ? 'hi' : 'en';
+
+  const al = (headers['accept-language'] || '').toString().toLowerCase();
+  if (al.startsWith('hi')) return 'hi';
+
+  return 'en';
 }
 function formatISTFull(dt = new Date()) {
   const { ist } = toISTParts(dt);
   const dateStr = ist.toLocaleDateString('en-GB', { day:'2-digit', month:'short', year:'numeric', timeZone:'Asia/Kolkata' });
   const timeStr = ist.toLocaleTimeString('en-GB', { hour:'2-digit', minute:'2-digit', hour12:false, timeZone:'Asia/Kolkata' });
   return `${dateStr} ${timeStr} IST`;
+}
+// Translation wrappers
+async function txOne(lang, s) {
+  if (lang !== 'hi') return s;
+  try {
+    const out = await translateAgent?.(s, 'hi') ?? await translateAgent?.({ text: s, to: 'hi' });
+    if (!out) return s;
+    if (typeof out === 'string') return out;
+    return out?.text || s;
+  } catch { return s; }
+}
+async function tx(lang, v) {
+  if (lang !== 'hi') return v;
+  if (Array.isArray(v)) {
+    const arr = [];
+    for (const s of v) arr.push(await txOne(lang, String(s)));
+    return arr;
+  }
+  return await txOne(lang, String(v));
 }
 
 // Always try a local logo if client didn’t send one
@@ -102,48 +265,25 @@ const BLESS = {
 // ─────────────────────────────────────────────────────────────────────────────
 // Vedic windows (12-hour day approximation; 6:00–18:00 with sunrise 06:00)
 // ─────────────────────────────────────────────────────────────────────────────
-// Mapping per weekday (0=Sun..6=Sat) for 12h-day approximation
 function approxVedicSlots12h(weekday /*0..6*/) {
-  // Rahu Kaal mapping you provided:
   const rahu = {
-    0: '16:30–18:00', // Sun
-    1: '07:30–09:00', // Mon
-    2: '15:00–16:30', // Tue
-    3: '12:00–13:30', // Wed
-    4: '13:30–15:00', // Thu
-    5: '10:30–12:00', // Fri
-    6: '09:00–10:30', // Sat
+    0: '16:30–18:00', 1: '07:30–09:00', 2: '15:00–16:30',
+    3: '12:00–13:30', 4: '13:30–15:00', 5: '10:30–12:00', 6: '09:00–10:30',
   }[weekday];
-
-  // Commonly used 12h patterns for Yamaganda / Gulika
   const yamaganda = {
-    0: '12:00–13:30', // Sun
-    1: '10:30–12:00', // Mon
-    2: '09:00–10:30', // Tue
-    3: '07:30–09:00', // Wed
-    4: '06:00–07:30', // Thu
-    5: '15:00–16:30', // Fri
-    6: '13:30–15:00', // Sat
+    0: '12:00–13:30', 1: '10:30–12:00', 2: '09:00–10:30',
+    3: '07:30–09:00', 4: '06:00–07:30', 5: '15:00–16:30', 6: '13:30–15:00',
   }[weekday];
-
   const gulika = {
-    0: '15:00–16:30', // Sun
-    1: '13:30–15:00', // Mon
-    2: '12:00–13:30', // Tue
-    3: '10:30–12:00', // Wed
-    4: '09:00–10:30', // Thu
-    5: '07:30–09:00', // Fri
-    6: '06:00–07:30', // Sat
+    0: '15:00–16:30', 1: '13:30–15:00', 2: '12:00–13:30',
+    3: '10:30–12:00', 4: '09:00–10:30', 5: '07:30–09:00', 6: '06:00–07:30',
   }[weekday];
-
-  // Abhijit (12h day center)
   const abhijit = '12:05–12:52';
   return { rahuKaal: rahu, yamaganda, gulikaKaal: gulika, abhijitMuhurat: abhijit };
 }
-
 function vedicAssumptionNote(lang='en') {
   return lang === 'hi'
-    ? 'टिप्पणी: वैदिक समय 6:00 AM सूर्योदय और 12 घंटे के दिन पर आधारित सरलीकृत अनुमान हैं — स्थान/ऋतु के अनुसार बदल सकते हैं।'
+    ? 'टिप्पणी: वैदिक समय 06:00 सूर्योदय और 12 घंटे के दिन पर आधारित सरलीकृत अनुमान हैं — स्थान/ऋतु के अनुसार बदल सकते हैं।'
     : 'Note: Vedic windows use a 6:00 AM sunrise and 12-hour day approximation — actual times vary by location/season.';
 }
 
@@ -152,15 +292,15 @@ function vedicAssumptionNote(lang='en') {
 // ─────────────────────────────────────────────────────────────────────────────
 function applyFont(doc, { lang = 'en', weight = 'regular' } = {}) {
   if (!FONTS_READY) return;
-  if (lang === 'hi') {
-    doc.font(weight === 'bold' ? FONT.hi.bold : FONT.hi.regular);
-  } else {
-    doc.font(weight === 'bold' ? FONT.en.bold : FONT.en.regular);
-  }
+  if (lang === 'hi') doc.font(weight === 'bold' ? FONT.hi.bold : FONT.hi.regular);
+  else doc.font(weight === 'bold' ? FONT.en.bold : FONT.en.regular);
 }
 function drawBullets(doc, items = [], { lang = 'en' } = {}) {
   const bullet = '•';
-  items.forEach(t => doc.text(`${bullet} ${cleanText(t)}`, { paragraphGap: 2, align: 'left' }));
+  doc.fontSize(12); // lock body size for bullets
+  (items || []).forEach(t => {
+    doc.text(`${bullet} ${cleanText(t)}`, { paragraphGap: 2, align: 'left' });
+  });
 }
 function addBrandHeader(doc, { lang, brand, titleLine, subLine }) {
   const logoSize = 52;
@@ -187,12 +327,10 @@ function addBrandHeader(doc, { lang, brand, titleLine, subLine }) {
   doc.fontSize(10).fillColor('#444').text(subLine, titleX, startY + 40);
   doc.fillColor('black').moveDown(1);
 
-  doc
-    .moveTo(doc.page.margins.left, doc.y)
-    .lineTo(doc.page.width - doc.page.margins.right, doc.y)
-    .strokeColor('#cccccc')
-    .stroke()
-    .strokeColor('black');
+  doc.moveTo(doc.page.margins.left, doc.y)
+     .lineTo(doc.page.width - doc.page.margins.right, doc.y)
+     .strokeColor('#cccccc').stroke()
+     .strokeColor('black');
   doc.moveDown(0.6);
 }
 function addUserBlock(doc, { lang, user }) {
@@ -217,7 +355,7 @@ function addUserBlock(doc, { lang, user }) {
 function addVedicTimings(doc, { lang, timings }) {
   const L = (en, hi) => lang === 'hi' ? hi : en;
   applyFont(doc, { lang, weight: 'bold' });
-  doc.fontSize(12).text(L('Vedic Timings (IST)', 'वैदिक समय (IST)'));
+  doc.fontSize(12).text(L('Vedic Timings (IST)', 'वैदिक समय (भारतीय मानक समय)'));
   applyFont(doc, { lang });
   doc.moveDown(0.2);
 
@@ -234,53 +372,151 @@ function addVedicTimings(doc, { lang, timings }) {
 function addVedicNote(doc, { lang }) {
   doc.fontSize(9).fillColor('#666').text(vedicAssumptionNote(lang));
   doc.fillColor('black').moveDown(0.6);
+  doc.fontSize(12); // restore body size for whatever comes next
 }
 function addSection(doc, { lang, heading, paragraphs = [] }) {
   applyFont(doc, { lang, weight: 'bold' });
   doc.fontSize(14).text(cleanText(heading));
   applyFont(doc, { lang });
   doc.moveDown(0.2);
-  paragraphs.forEach(p => doc.fontSize(12).text(cleanText(p), { paragraphGap: 6, align: 'justify' }));
+  (paragraphs || []).forEach(p => doc.fontSize(12).text(cleanText(p), { paragraphGap: 6, align: 'justify' }));
   doc.moveDown(0.4);
 }
 
+// ── NEW: helpers for Yearly PDFs ─────────────────────────────────────────────
+function labelFor(dt, lang='en') {
+  const locale = lang === 'hi' ? 'hi-IN' : 'en-GB';
+  return dt.toLocaleDateString(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+function startOfMonthUTC(d) {
+  const x = new Date(d);
+  return new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth(), 1));
+}
+function addMonthsUTC(d, n) {
+  const x = new Date(d);
+  return new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + n, 1));
+}
+function addPhaseBlocks(doc, { lang, phaseBlocks }) {
+  const pairs = [
+    ['Good','अच्छा'], ['Caution','सावधानियाँ'], ['Fun','मज़ा'], ['Gains','लाभ'],
+    ['Health','स्वास्थ्य'], ['Relationships','संबंध'], ['Opportunities','अवसर'], ['Remedies','उपाय']
+  ];
+  pairs.forEach(([en, hi]) => {
+    const items = phaseBlocks?.[en.toLowerCase()] || [];
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang==='hi'?hi:en); applyFont(doc, { lang });
+    drawBullets(doc, items, { lang });
+    doc.moveDown(0.3);
+  });
+}
+function addMonthPage(doc, { lang, m, dt }) {
+  doc.addPage();
+  const title = `${labelFor(dt, lang)} — ${m?.label?.split('—').pop()?.trim() || (lang==='hi'?'केंद्रित रहें • प्रवाह':'Focus & Flow')}`;
+  applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(16).text(title, { underline: true }); applyFont(doc, { lang });
+  doc.moveDown(0.6);
+  const healthConcerns = (m?.health?.concerns || '').trim();
+  const healthTips = (m?.health?.tips || '').trim();
+  const healthText = (healthConcerns || healthTips)
+    ? `${healthConcerns}${healthConcerns && healthTips ? ' — ' : ''}${lang==='hi'?'सुझाव':'Tips'}: ${healthTips}`
+    : '';
+  const kv = [
+    [lang==='hi'?'परिदृश्य':'Outlook', m.outlook],
+    [lang==='hi'?'करियर/प्रयास':'Career/Effort', m.career],
+    [lang==='hi'?'धन':'Money', m.money],
+    [lang==='hi'?'संबंध/परिवार':'Relationships/Family', m.relationships],
+    [lang==='hi'?'स्वास्थ्य':'Health', healthText],
+    [lang==='hi'?'सीख':'Learning', m.learning],
+    [lang==='hi'?'यात्रा':'Travel', m.travel],
+    [lang==='hi'?'अवसर':'Opportunity', m.opportunity],
+    [lang==='hi'?'रक्षा':'Protection', m?.protection?.text || ''],
+    [lang==='hi'?'चेकपॉइंट':'Checkpoint', m.checkpoint],
+  ];
+  kv.forEach(([k,v]) => { if (v) { applyFont(doc, { lang, weight:'bold' }); doc.fontSize(12).text(`${k}:`); applyFont(doc, { lang }); doc.text(cleanText(v)).moveDown(0.25); } });
+}
+
+// Fallback if agents are missing: read from contentBank.yearly
+function fallbackYearly({ sign, persona, anchorDate }) {
+  const s = String(sign || '').toLowerCase();
+  const pb = contentBank?.yearly?.[s] || null;
+  const bucket = (persona && pb?.[persona]) || pb?.default || null;
+  if (!bucket) throw new Error(`No yearly content for sign=${s}`);
+  const monthsRaw = Array.isArray(bucket.months) ? bucket.months : [];
+  const phaseBlocks = bucket.phaseBlocks || { good:[], caution:[], fun:[], gains:[], health:[], relationships:[], opportunities:[], remedies:[] };
+
+  const anchor = startOfMonthUTC(anchorDate ? new Date(anchorDate) : new Date());
+  const months = Array.from({ length: 13 }, (_, i) => monthsRaw[i % monthsRaw.length] || {});
+  return { phaseBlocks, months, anchor };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
-// Composer (pulls from all agents) — DAILY
+// Composer (pulls from all agents) — DAILY  (ASYNC + localized)
 // ─────────────────────────────────────────────────────────────────────────────
-function composeDaily({ sign='aries', lang='en', now=new Date(), user=null } = {}) {
+async function composeDaily({ sign='aries', lang='en', now=new Date(), user=null } = {}) {
   const s = (sign || '').toLowerCase();
+  const signLabel = signDisplay(s, lang);
   const { ist, dateStr, timeStr, weekdayIndex } = toISTParts(now);
+  const timeShort = ist.toLocaleTimeString(lang === 'hi' ? 'hi-IN' : 'en-GB', {
+    hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata'
+  }) + (lang === 'hi' ? ' बजे' : ' IST');
   const monthSalt = dateStr.slice(0,7); // YYYY-MM
   const seed = hashCode(`${monthSalt}|${s}|${dateStr}`);
 
-  const deity = dayDeityAgent(weekdayIndex, lang);
-  const format = formatAgent({ lang, dateIST: ist, deityPair: deity.pair });
-  const panchang = panchangAgent(); // keep your agent
+  const deity   = dayDeityAgent(weekdayIndex, lang);
+  const format  = formatAgent({ lang, dateIST: ist, deityPair: deity.pair });
+  const panchang= panchangAgent();
   const variety = varietyAgent({ sign: s, seed, weekdayIndex });
   const fortune = fortuneLineAgent({ sign: s, ist, seed, lang });
-  const qm = quoteMoodAgent(seed);
-  const policy = policyAgent(lang);
+  const qm      = quoteMoodAgent(seed);
+  const policy  = policyAgent(lang);
   const special = specialDayAgent({ now, lang, user }); // may be null
 
-  let themeLead = variety.themeLead;
-  let opp = variety.opportunities;
-  let caut = variety.cautions;
-  let remedy = variety.remedy;
+  // translate EN-only agent outputs when lang === 'hi'
+  let themeLead  = await tx(lang, variety.themeLead);
+  let opp        = await tx(lang, variety.opportunities);
+  let caut       = await tx(lang, variety.cautions);
+  let remedy     = await tx(lang, variety.remedy);
+  let quote       = await tx(lang, qm.quote);
+  let affirmation = await tx(lang, qm.affirmation);
+  let mood        = await tx(lang, qm.mood);
+  let luckyLine   = await tx(lang, fortune.luckyLine);
+
+  if (lang === 'hi') {
+    themeLead   = cleanHi(themeLead);
+    opp         = cleanHiList(opp);
+    caut        = cleanHiList(caut);
+    remedy      = cleanHi(remedy);
+    quote       = cleanHi(quote);
+    affirmation = cleanHi(affirmation);
+    mood        = cleanHi(mood);
+    luckyLine   = cleanHi(luckyLine);
+  }
+  const labels = lang==='hi'
+    ? { opp:'अवसर', caut:'सावधानियाँ', rem:'उपाय' }
+    : { opp:'Opportunities', caut:'Cautions', rem:'Remedy' };
+  const vedicNames = getVedicNames(lang);
+  const vedicList = [
+    { key: 'rahuKaal',       label: vedicNames.rahuKaal,       value: panchang.rahuKaal },
+    { key: 'yamaganda',      label: vedicNames.yamaganda,      value: panchang.yamaganda },
+    { key: 'gulikaKaal',     label: vedicNames.gulikaKaal,     value: panchang.gulikaKaal },
+    { key: 'abhijitMuhurat', label: vedicNames.abhijitMuhurat, value: panchang.abhijitMuhurat },
+  ];
 
   return {
     date: dateStr,
-    timeIST: timeStr,
+    timeIST: timeShort,
     lang,
     sign: s,
+    signLabel,
+    vedicNames,
+    vedicList,
     header: { dayHeader: format.dayHeader },
     greeting: greeting(lang),
     deityLine: format.deitySentenceParts,
-    quote: qm.quote,
-    affirmation: qm.affirmation,
-    mood: qm.mood,
+    quote,
+    affirmation,
+    mood,
     waterGlasses: qm.waterGlasses,
     themeLead,
-    luckyLine: fortune.luckyLine,
+    luckyLine,
     sections: {
       opportunities: opp,
       cautions: caut,
@@ -304,13 +540,169 @@ function composeDaily({ sign='aries', lang='en', now=new Date(), user=null } = {
     special,
     brandFooter: policy.footerBrand,
 
-    // legacy
-    text: `**${capSign(s)} • ${dateStr}**\n${themeLead}\n${fortune.luckyLine}\n\nOpportunities:\n- ${opp.join('\n- ')}\n\nCautions:\n- ${caut.join('\n- ')}\n\nRemedy:\n${remedy}`
+    // legacy text (now localized labels)
+    text:
+      `**${signLabel} • ${dateStr}**\n` +
+      `${themeLead}\n${luckyLine}\n\n` +
+      `${labels.opp}:\n- ${opp.join('\n- ')}\n\n` +
+      `${labels.caut}:\n- ${caut.join('\n- ')}\n\n` +
+      `${labels.rem}:\n${remedy}`
   };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Gemstone / Mantra composers (sign-only safe fallbacks)
+// Routes — debug
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/', (req, res) => res.json({ ok: true, service: 'Astro-Baba Chat API' }));
+app.get('/debug/fonts', (req, res) => res.json(checkFonts()));
+app.get('/debug/version', (req, res) => res.json({
+  time: new Date().toISOString(),
+  build: BUILD,
+  node: process.version,
+  env: process.env.NODE_ENV || 'production',
+  commit: process.env.RENDER_GIT_COMMIT || null,
+  cwd: process.cwd(),
+  fontsReady: FONTS_READY,
+}));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DAILY JSON  (await async composer)
+// ─────────────────────────────────────────────────────────────────────────────
+app.get('/daily', async (req, res) => {
+  const sign = (req.query.sign || 'aries').toString().toLowerCase();
+  const lang = pickLang({ lang: req.query.lang }, req.headers);
+  const data = await composeDaily({ sign, lang });
+  res.json({
+    date: data.date,
+    sign: data.sign,
+    lang: data.lang,
+    text: data.text,
+    vedic: data.vedic,
+    generatedAt: new Date().toISOString(),
+    rich: data
+  });
+});
+app.post('/daily', async (req, res) => {
+  const { sign='aries', lang='en', user=null } = req.body || {};
+  const data = await composeDaily({ sign, lang: pickLang({ lang }, req.headers), user });
+  res.json({
+    date: data.date,
+    sign: data.sign,
+    lang: data.lang,
+    text: data.text,
+    vedic: data.vedic,
+    generatedAt: new Date().toISOString(),
+    rich: data
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DAILY → PDF  (await async composer)
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/report/from-daily', async (req, res) => {
+  try {
+    const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
+    const lang  = pickLang({ lang: rawLang }, req.headers);
+    const daily = await composeDaily({ sign, lang, user });
+
+    const doc = new PDFDocument({ margin: 36, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="AstroBaba_Daily_${sign}_${daily.date}_${lang}.pdf"`);
+
+    applyFont(doc, { lang, weight: 'regular' });
+
+    const titleLine = lang==='hi' ? 'दैनिक राशिफल' : 'Daily Horoscope';
+    const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${daily.date} ${daily.timeIST}`;
+    const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
+    addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
+
+    addUserBlock(doc, { lang, user: {
+      name:  user?.name, phone: user?.phone, email: user?.email, gender:user?.gender,
+      dob:   user?.dob,  tob:   user?.time || user?.tob,       place: user?.place,
+    }});
+
+    addVedicTimings(doc, { lang, timings: daily.vedic });
+
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(14).text(daily.header.dayHeader, { align: 'center' });
+    applyFont(doc, { lang });
+    doc.moveDown(0.5);
+
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(daily.greeting); applyFont(doc, { lang });
+
+    doc.moveDown(0.2);
+    doc.fontSize(12);
+    doc.text(daily.deityLine.pre, { continued: true });
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.text(daily.deityLine.bold, { continued: true });
+    applyFont(doc, { lang });
+    doc.text(daily.deityLine.post);
+
+    if (daily.special) {
+      doc.moveDown(0.6);
+      applyFont(doc, { lang, weight: 'bold' });
+      doc.fontSize(13).text(daily.special.title);
+      applyFont(doc, { lang });
+      if (daily.special.birthday) doc.text(daily.special.birthday);
+      if (daily.special.observance) doc.text(`${daily.special.observance.title} — ${daily.special.observance.line}`);
+    }
+
+    doc.moveDown(0.6);
+    doc.fontSize(11).text(daily.quote);
+    doc.moveDown(0.2);
+    doc.fontSize(11).text(lang==='hi' ? 'स्व-वचन: ' : 'Affirmation: ', { continued: true });
+    applyFont(doc, { lang, weight: 'bold' }); doc.text(daily.affirmation); applyFont(doc, { lang });
+    doc.moveDown(0.2);
+    doc.fontSize(11).text(lang==='hi' ? `आज का मूड: ${daily.mood}` : `Mood: ${daily.mood}`);
+    doc.fontSize(11).text(lang==='hi' ? `जल सेवन: कम से कम ${daily.waterGlasses} गिलास` : `Water: at least ${daily.waterGlasses} glasses`);
+
+    doc.moveDown(0.6);
+    doc.fontSize(12).text(daily.themeLead, { paragraphGap: 6 });
+    doc.fontSize(12).text(daily.luckyLine);
+
+    doc.moveDown(0.8);
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang==='hi'?'अवसर':'Opportunities'); applyFont(doc, { lang });
+    drawBullets(doc, daily.sections.opportunities, { lang });
+
+    doc.moveDown(0.4);
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang==='hi'?'सावधानियाँ':'Cautions'); applyFont(doc, { lang });
+    drawBullets(doc, daily.sections.cautions, { lang });
+
+    doc.moveDown(0.4);
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang==='hi'?'उपाय':'Remedy'); applyFont(doc, { lang });
+    doc.fontSize(12).text(daily.sections.remedy);
+
+    doc.moveDown(0.8);
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(14).text(lang==='hi' ? 'वैदिक अवधियाँ' : 'About the Vedic Periods');
+    applyFont(doc, { lang });
+    drawBullets(doc, daily.sections.vedicExplain, { lang });
+    addVedicNote(doc, { lang });
+
+    doc.moveDown(0.8);
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'अंतिम नोट' : 'Final Note'); applyFont(doc, { lang });
+    doc.moveDown(0.2);
+    doc.fontSize(11).text(daily.policy.disclaimer);
+    doc.moveDown(0.6);
+    doc.fontSize(12).text(daily.policy.thanks);
+    doc.moveDown(0.2);
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(12).text(lang==='hi' ? BLESS.hi : BLESS.en);
+    applyFont(doc, { lang });
+
+    doc.moveDown(0.8);
+    const year = new Date().getFullYear();
+    doc.fontSize(9).fillColor('#555').text(`© ${year} ${daily.brandFooter}`, { align: 'center' });
+    doc.fillColor('black');
+
+    doc.pipe(res); doc.end();
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GEMSTONE → PDF
 // ─────────────────────────────────────────────────────────────────────────────
 function rulerForSign(sign) {
   const s = String(sign).toLowerCase();
@@ -321,10 +713,8 @@ function rulerForSign(sign) {
   };
   return map[s] || 'sun';
 }
-
 function gemPlanForSign(sign) {
   const r = rulerForSign(sign);
-  // Safe upratna alternates where needed; avoid default Venus for Aries
   const plan = {
     mars:   { primary:'Red Coral (Moonga)', alt:'Carnelian', tone:'discipline, courage, decisive action' },
     venus:  { primary:'Diamond / White Sapphire (caution: chart-specific)', alt:'Opal / Zircon', tone:'harmony, relationships, aesthetics' },
@@ -334,14 +724,11 @@ function gemPlanForSign(sign) {
     jupiter:{ primary:'Yellow Sapphire (Pukhraj)', alt:'Citrine', tone:'wisdom, growth, blessings' },
     saturn: { primary:'Blue Sapphire (Neelam — test first)', alt:'Amethyst', tone:'steadiness, structure, patience' },
   }[r];
-
-  // Aries special guard: do not suggest Diamond by default
   if (String(sign).toLowerCase() === 'aries') {
     return { ...plan, note:'For Aries, avoid Venus stones by default unless a full chart approves.' };
   }
   return plan;
 }
-
 function mantraForPlanet(planet) {
   const map = {
     sun:     { seed:'Om Hram Hrim Hraum Suryaya Namah', count:108 },
@@ -356,196 +743,27 @@ function mantraForPlanet(planet) {
   };
   return map[planet] || map.sun;
 }
-
 function powerGemText(lang) {
   return lang === 'hi'
-    ? 'ज्योतिष परंपरा के अनुसार, रत्न सूक्ष्म लेंस की तरह सहायक ग्रह धाराओं की ओर ध्यान ट्यून करते हैं। आकार में छोटे पर प्रभाव में समर्थ—मानो बड़े ताले की छोटी चाबी। सही धातु, उचित उंगली और विधिपूर्वक ऊर्जन के साथ, रत्न अनुकूल ऊर्जा को छानकर केंद्रित करने में सहायक होता है। विश्वास और अनुशासन के साथ पहना गया सही रत्न मन को स्थिर कर सकता है, अटकी संभावनाएँ खोल सकता है और प्रतिकूल प्रभावों से सौम्य संरक्षण दे सकता है।'
-    : 'As per Jyotish tradition, gemstones act like tiny lenses that tune you toward supportive planetary currents. Small yet potent—like a small key for a big lock. Set in the proper metal, on the correct finger, and duly energized, a stone helps filter and focus favourable energies. With steady faith and discipline, a correctly prescribed stone can steady the mind, unlock stuck opportunities, and gently shield against adverse influences.';
+    ? 'ज्योतिष परंपरा के अनुसार, रत्न सूक्ष्म लेंस की तरह सहायक ग्रह धाराओं की ओर ध्यान ट्यून करते हैं। आकार में छोटे पर प्रभाव में समर्थ—मानो बड़े ताले की छोटी चाबी...'
+    : 'As per Jyotish tradition, gemstones act like tiny lenses that tune you toward supportive planetary currents—small yet potent, like a small key for a big lock...';
 }
-
 function powerMantraText(lang) {
   return lang === 'hi'
-    ? 'मंत्र छोटी चाबी की तरह बड़े ताले के लिए हो सकता है। समस्याएँ बड़ी दिखें, फिर भी सही ध्वनि का सही जप मनोदशा, एकाग्रता और कृपा को सँवार देता है। नियमित जप आधुनिक काल का संकल्प-साधना है—उचित उच्चारण, निश्चित संख्या और स्पष्ट भाव से अटके रास्ते खुल सकते हैं। कुछ पंक्तियाँ भी, सही विधि और निरंतरता से, परिणाम बदलने में सक्षम हैं।'
-    : 'A mantra can be a small key for a big lock. Problems may look large, but the right sound in the right way reshapes mood, focus, and grace around you. Regular chanting is modern-day manifestation—the precise vibration, count, and intention can unlock stuck paths. Even a few lines, done correctly and consistently, can shift outcomes.';
+    ? 'मंत्र छोटी चाबी की तरह बड़े ताले के लिए हो सकता है—सही ध्वनि, सही विधि और नियमितता से मन, एकाग्रता और अनुग्रह संवरते हैं...'
+    : 'A mantra can be a small key for a big lock—the right sound, done correctly and regularly, reshapes mood, focus, and grace...';
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Routes — debug
-// ─────────────────────────────────────────────────────────────────────────────
-app.get('/', (req, res) => res.json({ ok: true, service: 'Astro-Baba Chat API' }));
-app.get('/debug/fonts', (req, res) => res.json(checkFonts()));
-app.get('/debug/version', (req, res) => res.json({
-  time: new Date().toISOString(),
-  node: process.version,
-  env: process.env.NODE_ENV || 'production',
-  commit: process.env.RENDER_GIT_COMMIT || null,
-  cwd: process.cwd(),
-  fontsReady: FONTS_READY,
-}));
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DAILY JSON
-// ─────────────────────────────────────────────────────────────────────────────
-app.get('/daily', (req, res) => {
-  const sign = (req.query.sign || 'aries').toString().toLowerCase();
-  const lang = pickLang({ lang: req.query.lang });
-  const data = composeDaily({ sign, lang });
-  res.json({
-    date: data.date,
-    sign: data.sign,
-    lang: data.lang,
-    text: data.text,
-    vedic: data.vedic,
-    generatedAt: new Date().toISOString(),
-    rich: data
-  });
-});
-app.post('/daily', (req, res) => {
-  const { sign='aries', lang='en', user=null } = req.body || {};
-  const data = composeDaily({ sign, lang: pickLang({ lang }), user });
-  res.json({
-    date: data.date,
-    sign: data.sign,
-    lang: data.lang,
-    text: data.text,
-    vedic: data.vedic,
-    generatedAt: new Date().toISOString(),
-    rich: data
-  });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// DAILY → PDF
-// ─────────────────────────────────────────────────────────────────────────────
-app.post('/report/from-daily', async (req, res) => {
-  try {
-    const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
-    const lang  = pickLang({ lang: rawLang });
-    const daily = composeDaily({ sign, lang, user });
-
-    const doc = new PDFDocument({ margin: 36, bufferPages: true });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="AstroBaba_Daily_${sign}_${daily.date}_${lang}.pdf"`);
-
-    applyFont(doc, { lang, weight: 'regular' });
-
-    // Header (brand once; subline with name + IST)
-    const titleLine = lang==='hi' ? 'दैनिक राशिफल' : 'Daily Horoscope';
-    const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${daily.date} ${daily.timeIST}`;
-    const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
-    addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
-
-    // User block
-    addUserBlock(doc, { lang, user: {
-      name:  user?.name, phone: user?.phone, email: user?.email, gender:user?.gender,
-      dob:   user?.dob,  tob:   user?.time || user?.tob,       place: user?.place,
-    }});
-
-    // Vedic timings (+ note)
-    addVedicTimings(doc, { lang, timings: daily.vedic });
-    addVedicNote(doc, { lang });
-
-    // Day header (EN CAPS / HI natural)
-    applyFont(doc, { lang, weight: 'bold' });
-    doc.fontSize(14).text(daily.header.dayHeader, { align: 'center' });
-    applyFont(doc, { lang });
-    doc.moveDown(0.5);
-
-    // Greeting (bold)
-    applyFont(doc, { lang, weight: 'bold' });
-    doc.fontSize(12).text(daily.greeting);
-    applyFont(doc, { lang });
-
-    // “Today being **X** day.”
-    doc.moveDown(0.2);
-    doc.fontSize(12);
-    doc.text(daily.deityLine.pre, { continued: true });
-    applyFont(doc, { lang, weight: 'bold' });
-    doc.text(daily.deityLine.bold, { continued: true });
-    applyFont(doc, { lang });
-    doc.text(daily.deityLine.post);
-
-    // Special Day (optional)
-    if (daily.special) {
-      doc.moveDown(0.6);
-      applyFont(doc, { lang, weight: 'bold' });
-      doc.fontSize(13).text(daily.special.title);
-      applyFont(doc, { lang });
-      if (daily.special.birthday) doc.text(daily.special.birthday);
-      if (daily.special.observance) {
-        doc.text(`${daily.special.observance.title} — ${daily.special.observance.line}`);
-      }
-    }
-
-    // Quote / affirmation / mood / water
-    doc.moveDown(0.6);
-    doc.fontSize(11).text(daily.quote);
-    doc.moveDown(0.2);
-    doc.fontSize(11).text(lang==='hi' ? 'स्व-वचन: ' : 'Affirmation: ', { continued: true });
-    applyFont(doc, { lang, weight: 'bold' }); doc.text(daily.affirmation); applyFont(doc, { lang });
-    doc.moveDown(0.2);
-    doc.fontSize(11).text(lang==='hi' ? `आज का मूड: ${daily.mood}` : `Mood: ${daily.mood}`);
-    doc.fontSize(11).text(lang==='hi' ? `जल सेवन: कम से कम ${daily.waterGlasses} गिलास` : `Water: at least ${daily.waterGlasses} glasses`);
-
-    // Lead + lucky
-    doc.moveDown(0.6);
-    doc.fontSize(12).text(daily.themeLead, { paragraphGap: 6 });
-    doc.fontSize(12).text(daily.luckyLine);
-
-    // Sections
-    doc.moveDown(0.8);
-    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang==='hi'?'अवसर':'Opportunities'); applyFont(doc, { lang });
-    drawBullets(doc, daily.sections.opportunities, { lang });
-
-    doc.moveDown(0.4);
-    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang==='hi'?'सावधानियाँ':'Cautions'); applyFont(doc, { lang });
-    drawBullets(doc, daily.sections.cautions, { lang });
-
-    doc.moveDown(0.4);
-    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang==='hi'?'उपाय':'Remedy'); applyFont(doc, { lang });
-    doc.fontSize(12).text(daily.sections.remedy);
-
-    // About the Vedic Periods
-    doc.moveDown(0.8);
-    applyFont(doc, { lang, weight: 'bold' });
-    doc.fontSize(14).text(lang==='hi' ? 'वैदिक अवधियाँ' : 'About the Vedic Periods');
-    applyFont(doc, { lang });
-    drawBullets(doc, daily.sections.vedicExplain, { lang });
-
-    // Final note + thanks + blessing
-    doc.moveDown(0.8);
-    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'अंतिम नोट' : 'Final Note'); applyFont(doc, { lang });
-    doc.moveDown(0.2);
-    doc.fontSize(11).text(daily.policy.disclaimer);
-    doc.moveDown(0.6);
-    doc.fontSize(12).text(daily.policy.thanks);
-    doc.moveDown(0.2);
-    applyFont(doc, { lang, weight: 'bold' });
-    doc.fontSize(12).text(lang==='hi' ? BLESS.hi : BLESS.en);
-    applyFont(doc, { lang });
-
-    // Footer ©
-    doc.moveDown(0.8);
-    const year = new Date().getFullYear();
-    doc.fontSize(9).fillColor('#555').text(`© ${year} ${daily.brandFooter}`, { align: 'center' });
-    doc.fillColor('black');
-
-    doc.pipe(res); doc.end();
-  } catch (e) {
-    res.status(500).json({ error: e.message || String(e) });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// GEMSTONE → PDF (hybrid; sign-safe)
-// ─────────────────────────────────────────────────────────────────────────────
 app.post('/report/gemstone', async (req, res) => {
   try {
     const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
-    const lang = pickLang({ lang: rawLang });
+    const lang = pickLang({ lang: rawLang }, req.headers);
     const { dateStr, timeStr } = toISTParts(new Date());
     const plan = gemPlanForSign(sign);
     const planet = rulerForSign(sign);
+
+    const toneHI = await tx(lang, plan.tone);
+    const noteHI = plan?.note ? await tx(lang, plan.note) : null;
 
     const doc = new PDFDocument({ margin: 36, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
@@ -553,7 +771,9 @@ app.post('/report/gemstone', async (req, res) => {
 
     applyFont(doc, { lang });
 
-    const titleLine = lang==='hi' ? `रत्न मार्गदर्शन — ${capSign(sign)}` : `Gemstone Guidance — ${capSign(sign)}`;
+    const titleLine = lang==='hi'
+      ? `रत्न मार्गदर्शन — ${signDisplay(sign, 'hi')}`
+      : `Gemstone Guidance — ${capSign(sign)}`;    
     const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${dateStr} ${timeStr}`;
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
@@ -563,91 +783,50 @@ app.post('/report/gemstone', async (req, res) => {
       dob:user?.dob, tob:user?.time || user?.tob, place:user?.place,
     }});
 
-    // Greeting
     applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(greeting(lang)); applyFont(doc, { lang }); doc.moveDown(0.6);
 
-    // Planetary snapshot
     const snapHead = lang==='hi' ? 'ग्रह संकेत (संक्षेप)' : 'Planetary Snapshot (brief)';
     const snapPara = lang==='hi'
-      ? `आपके सूर्य राशि हेतु प्राथमिक ग्रह संकेत: ${capSign(sign)} के लिए ${planet.toUpperCase()} — ${plan.tone}.`
+      ? `आपके सूर्य राशि हेतु प्राथमिक ग्रह संकेत: ${capSign(sign)} के लिए ${planet.toUpperCase()} — ${toneHI}.`
       : `Primary support for your sun sign: ${capSign(sign)} leans on ${planet.toUpperCase()} — ${plan.tone}.`;
     addSection(doc, { lang, heading: snapHead, paragraphs: [snapPara] });
 
-    // Recommendations
     const recHead = lang==='hi' ? 'मुख्य सुझाव' : 'Recommendation';
     const lines = lang==='hi'
       ? [
           `प्रमुख रत्न: ${plan.primary}`,
-          `वैकल्पिक (हल्का/उप्रत्न): ${plan.alt}`,
-          `उद्देश्य: ${plan.tone}`,
-          plan?.note ? `नोट: ${plan.note}` : null
+          `वैकल्पिक (उप्रत्न): ${plan.alt}`,
+          `उद्देश्य: ${toneHI}`,
+          noteHI ? `नोट: ${noteHI}` : null
         ].filter(Boolean)
       : [
           `Primary gemstone: ${plan.primary}`,
-          `Alternate (upratna/gentler): ${plan.alt}`,
+          `Alternate (upratna): ${plan.alt}`,
           `Planet focus: ${plan.tone}`,
           plan?.note ? `Note: ${plan.note}` : null
         ].filter(Boolean);
     addSection(doc, { lang, heading: recHead, paragraphs: lines });
 
-    // How to wear
     const howHead = lang==='hi' ? 'कैसे पहनें' : 'How to Wear';
     const howParas = lang==='hi'
-      ? [
-          'आरंभ: मंगलवार/शनिवार, अभिजीत मुहूर्त में।',
-          'परीक्षण अवधि: 45–60 दिन; मन की स्थिरता, ऊर्जा, ध्यान पर ध्यान दें।',
-          'धातु: सिल्वर (या पंचधातु)।',
-          'उंगली/हाथ: दाएँ हाथ की अनामिका उंगली (आम रूप से)।',
-          'वज़न: सम्मत के अनुसार; पत्थर असली रखें — पारदर्शिता आकार से अधिक महत्त्वपूर्ण।',
-          'शुद्धि: स्वच्छ जल + कच्चे दूध की कुछ बूँदें; मुलायम कपड़े से पोंछें।',
-          'ऊर्जन: दीपक जलाएँ; “ॐ क्राम क्रीम क्रौं सह भौमाय नमः” 108×; संकल्प बोलें।',
-          'पहनने के बाद 11 मिनट शांत रहें।'
-        ]
-      : [
-          'Start: Tuesday/Saturday, during Abhijit Muhurat.',
-          'Trial: 45–60 days; observe calmness, energy and focus.',
-          'Metal: Silver (or Panchdhatu).',
-          'Finger/hand: Ring finger (right) in most cases.',
-          'Weight: As advised — keep it genuine; clarity > size.',
-          'Cleansing: Clean water + a few drops of raw milk; pat dry.',
-          'Energizing: Light a diya; chant “Om Kraam Kreem Kraum Sah Bhaumaya Namah” 108×; state your Sankalpa.',
-          'After wearing, stay calm for ~11 minutes.'
-        ];
+      ? ['आरंभ: मंगलवार/शनिवार, अभिजीत मुहूर्त में।','परीक्षण: 45–60 दिन।','धातु: सिल्वर/पंचधातु।','उंगली: दाएँ हाथ की अनामिका।','शुद्धि: जल + कच्चा दूध।','ऊर्जन: “ॐ क्राम क्रीम क्रौं सह भौमाय नमः” 108×।']
+      : ['Start: Tue/Sat, Abhijit Muhurat.','Trial: 45–60 days.','Metal: Silver/Panchdhatu.','Finger: Right ring finger.','Cleansing: Water + raw milk.','Energizing: “Om Kraam… Bhaumaya Namah” 108×.'];
     addSection(doc, { lang, heading: howHead, paragraphs: howParas });
 
-    // Do / Don't
     const ddHead = lang==='hi' ? 'क्या करें / क्या न करें' : 'Do / Don’t';
     const ddLines = lang==='hi'
-      ? [
-          'करें: यदि पत्थर टूटे/दरारे हों तो हटाएँ; असंगत रत्नों के साथ एक साथ न पहनें।',
-          'न करें: सिंथेटिक/उष्मा-उपचारित रत्नों को मिलाकर न पहनें; एलर्जी हो तो परहेज़ करें।',
-          'रखरखाव: हल्का साफ़ करें; कठोर रसायनों से बचें; मासिक ऊर्जन (मंगलवार शाम)।'
-        ]
-      : [
-          'Do: Remove if cracked/chipped; avoid wearing alongside incompatible stones.',
-          'Don’t: Mix with synthetic/heat-treated stones; avoid during metal-allergy flare-ups.',
-          'Maintenance: Gentle cleaning; avoid harsh chemicals; monthly re-energizing (Tuesday evening).'
-        ];
+      ? ['करें: टूटा/दरार पत्थर हटाएँ।','न करें: असंगत/सिंथेटिक साथ न पहनें।','रखरखाव: हल्की सफ़ाई, मासिक ऊर्जन।']
+      : ['Do: Remove cracked stones.','Don’t: Mix incompatible/synthetic stones.','Care: Gentle cleaning; monthly energizing.'];
     addSection(doc, { lang, heading: ddHead, paragraphs: ddLines });
 
-    // Sankalpa
     const sankHead = lang==='hi' ? 'संकल्प (एक वाक्य)' : 'Sankalpa (intention)';
     const sankLine = lang==='hi'
       ? '“श्रद्धा और अनुशासन के साथ, यह रत्न मेरी ऊर्जा को स्थिर करे और सही अवसर खोले।”'
       : '“With faith and discipline, may this stone steady my energy and open right opportunities.”';
     addSection(doc, { lang, heading: sankHead, paragraphs: [sankLine] });
 
-    // Observation checklist
-    const obsHead = lang==='hi' ? 'अवलोकन जाँच सूची' : 'Observation checklist';
-    const obs = lang==='hi'
-      ? 'नींद ◻  ऊर्जा ◻  मनोदशा ◻  एकाग्रता ◻  वित्त ◻  संबंध ◻  स्वास्थ्य ◻'
-      : 'Sleep ◻  Energy ◻  Mood ◻  Focus ◻  Finances ◻  Relationships ◻  Health ◻';
-    addSection(doc, { lang, heading: obsHead, paragraphs: [obs] });
-
-    // Power of Gemstones (philosophy)
     addSection(doc, { lang, heading: lang==='hi'?'रत्न की शक्ति':'Power of Gemstones', paragraphs: [powerGemText(lang)] });
 
-    // Final note + thanks + blessing
     const pol = policyAgent(lang);
     doc.moveDown(0.8);
     applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'अंतिम नोट' : 'Final Note'); applyFont(doc, { lang });
@@ -661,49 +840,29 @@ app.post('/report/gemstone', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message || String(e) }); }
 });
 
-// GENERIC PACKAGE → PDF (Gemstone / Mantra etc.)
-// Uses existing helpers: pickLang, toISTParts, applyFont, ensureBrandWithLogo,
-// addBrandHeader, addUserBlock, addSection, drawBullets, greeting, policyAgent.
+// GENERIC PACKAGE → PDF
 app.post('/report/generate', async (req, res) => {
   try {
     const { package: pkg = 'gemstone', user = {}, brand = {}, lang: rawLang } = req.body || {};
-    const lang = pickLang({ lang: rawLang });
+    const lang = pickLang({ lang: rawLang }, req.headers);
     const now  = new Date();
     const { dateStr, timeStr } = toISTParts(now);
 
-    // Minimal sample content (you can swap in your Gemstone/Mantra composer later)
-    const titleLine = lang === 'hi'
-      ? (pkg === 'mantra' ? 'मंत्र रिपोर्ट' : 'रत्न रिपोर्ट')
-      : (pkg === 'mantra' ? 'Mantra Report' : 'Gemstone Report');
-
+    const titleLine = lang === 'hi' ? (pkg === 'mantra' ? 'मंत्र रिपोर्ट' : 'रत्न रिपोर्ट') : (pkg === 'mantra' ? 'Mantra Report' : 'Gemstone Report');
     const intro = lang === 'hi'
-      ? [
-          'यह संक्षिप्त, व्यावहारिक मार्गदर्शिका है — सरल कदमों में पालन करें।',
-          'पहले 45–60 दिनों तक नियमितता बनाए रखें और अनुभव दर्ज करें।'
-        ]
-      : [
-          'This is a concise, practical guide — follow in simple steps.',
-          'Maintain regularity for 45–60 days and track observations.'
-        ];
-
+      ? ['यह संक्षिप्त, व्यावहारिक मार्गदर्शिका है — सरल कदमों में पालन करें।','पहले 45–60 दिनों तक नियमितता बनाए रखें और अनुभव दर्ज करें।']
+      : ['This is a concise, practical guide — follow in simple steps.','Maintain regularity for 45–60 days and track observations.'];
     const opp = lang === 'hi'
-      ? ['आज एक छोटा लेकिन स्पष्ट कदम उठाएँ।', 'सही समय/उंगली/धातु पर ध्यान दें।', 'साप्ताहिक नोट्स बनाएं — ऊर्जा/मूड/नींद।']
-      : ['Take one small, clear step today.', 'Mind the correct time/finger/metal.', 'Keep weekly notes: energy/mood/sleep.'];
-
+      ? ['आज एक छोटा लेकिन स्पष्ट कदम उठाएँ।','सही समय/उंगली/धातु पर ध्यान दें।','साप्ताहिक नोट्स बनाएं — ऊर्जा/मूड/नींद।']
+      : ['Take one small, clear step today.','Mind the correct time/finger/metal.','Keep weekly notes: energy/mood/sleep.'];
     const caut = lang === 'hi'
-      ? ['अत्यधिक अपेक्षाओं से बचें — क्रमिक प्रगति सर्वोत्तम है।', 'कृत्रिम/हीट-ट्रीटेड से बचें।', 'एलर्जी/चोट की स्थिति में विराम लें।']
-      : ['Avoid over-expectation — steady progress is best.', 'Avoid synthetic/heat-treated pieces.', 'Pause in case of allergy/injury.'];
-
-    const remedy = lang === 'hi'
-      ? 'शाम को दीपक जलाएँ, 11 बार जप करें और 2 मिनट शांति रखें।'
-      : 'In the evening, light a diya, chant 11×, and sit calmly for 2 minutes.';
+      ? ['अत्यधिक अपेक्षाओं से बचें — क्रमिक प्रगति सर्वोत्तम है।','कृत्रिम/हीट-ट्रीटेड से बचें।','एलर्जी/चोट की स्थिति में विराम लें।']
+      : ['Avoid over-expectation — steady progress is best.','Avoid synthetic/heat-treated pieces.','Pause in case of allergy/injury.'];
+    const remedy = lang === 'hi' ? 'शाम को दीपक जलाएँ, 11 बार जप करें और 2 मिनट शांति रखें।' : 'In the evening, light a diya, chant 11×, and sit calmly for 2 minutes.';
 
     const doc = new PDFDocument({ margin: 36, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="AstroBaba_${pkg}_${dateStr}_${lang}.pdf"`
-    );
+    res.setHeader('Content-Disposition', `attachment; filename="AstroBaba_${pkg}_${dateStr}_${lang}.pdf"`);
 
     applyFont(doc, { lang });
 
@@ -711,72 +870,47 @@ app.post('/report/generate', async (req, res) => {
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
-    addUserBlock(doc, {
-      lang,
-      user: {
-        name: user?.name,
-        phone: user?.phone,
-        email: user?.email,
-        gender: user?.gender,
-        dob: user?.dob,
-        tob: user?.time || user?.tob,
-        place: user?.place
-      }
-    });
+    addUserBlock(doc, { lang, user: { name:user?.name, phone:user?.phone, email:user?.email, gender:user?.gender, dob:user?.dob, tob:user?.time || user?.tob, place:user?.place } });
 
-    // Greeting
-    applyFont(doc, { lang, weight: 'bold' });
-    doc.fontSize(12).text(greeting(lang));
-    applyFont(doc, { lang });
-    doc.moveDown(0.6);
+    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(greeting(lang)); applyFont(doc, { lang }); doc.moveDown(0.6);
 
-    // Intro
     addSection(doc, { lang, heading: lang === 'hi' ? 'परिचय' : 'Introduction', paragraphs: intro });
 
-    // Opportunities / Cautions
     applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang === 'hi' ? 'अवसर' : 'Opportunities'); applyFont(doc, { lang });
     drawBullets(doc, opp, { lang }); doc.moveDown(0.4);
 
     applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang === 'hi' ? 'सावधानियाँ' : 'Cautions'); applyFont(doc, { lang });
     drawBullets(doc, caut, { lang }); doc.moveDown(0.4);
 
-    // Practice / Remedy
     addSection(doc, { lang, heading: lang === 'hi' ? 'अभ्यास/उपाय' : 'Practice / Remedy', paragraphs: [remedy] });
 
-    // Standard blessing line (bold look via Unicode bold characters)
     doc.moveDown(0.8);
     applyFont(doc, { lang, weight: 'bold' });
-    doc.fontSize(12).text(
-      lang === 'hi'
-        ? '𝗛𝗮𝘃𝗲 𝗮 𝗯𝗹𝗲𝘀𝘀𝗲𝗱 𝗱𝗮𝘆!! 𝗪𝗲 𝘄𝗶𝘀𝗵 𝘆𝗼𝘂 𝗮 𝘃𝗲𝗿𝘆 𝗰𝗵𝗲𝗲𝗿𝗳𝘂𝗹, 𝗽𝗿𝗼𝘀𝗽𝗲𝗿𝗼𝘂𝘀 𝗮𝗻𝗱 𝘄𝗼𝗻𝗱𝗲𝗿𝗳𝘂𝗹 𝗱𝗮𝘆 𝗮𝗵𝗲𝗮𝗱 𝘄𝗶𝘁𝗵 𝗹𝗼𝘁𝘀 𝗼𝗳 𝗯𝗹𝗲𝘀𝘀𝗶𝗻𝗴𝘀...'
-        : '𝗛𝗮𝘃𝗲 𝗮 𝗯𝗹𝗲𝘀𝘀𝗲𝗱 𝗱𝗮𝘆!! 𝗪𝗲 𝘄𝗶𝘀𝗵 𝘆𝗼𝘂 𝗮 𝘃𝗲𝗿𝘆 𝗰𝗵𝗲𝗲𝗿𝗳𝘂𝗹, 𝗽𝗿𝗼𝘀𝗽𝗲𝗿𝗼𝘂𝘀 𝗮𝗻𝗱 𝘄𝗼𝗻𝗱𝗲𝗿𝗳𝘂𝗹 𝗱𝗮𝘆 𝗮𝗵𝗲𝗮𝗱 𝘄𝗶𝘁𝗵 𝗹𝗼𝘁𝘀 𝗼𝗳 𝗯𝗹𝗲𝘀𝘀𝗶𝗻𝗴𝘀...'
-    );
+    doc.fontSize(12).text(lang === 'hi' ? BLESS.hi : BLESS.en);
     applyFont(doc, { lang });
 
-    // Footer ©
     const pol = policyAgent(lang);
     doc.moveDown(0.6);
     const year = new Date().getFullYear();
     doc.fontSize(9).fillColor('#555').text(`© ${year} ${pol.footerBrand}`, { align: 'center' });
     doc.fillColor('black');
 
-    doc.pipe(res);
-    doc.end();
+    doc.pipe(res); doc.end();
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
   }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// MANTRA → PDF (hybrid; sign-safe)
+// MANTRA → PDF
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/report/mantra', async (req, res) => {
   try {
     const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
-    const lang    = pickLang({ lang: rawLang });
-    const { dateStr, timeStr, weekdayIndex } = toISTParts(new Date());
+    const lang    = pickLang({ lang: rawLang }, req.headers);
+    const { dateStr, timeStr } = toISTParts(new Date());
     const planet  = rulerForSign(sign);
-    const seedMan = mantraForPlanet(planet);
+    const seedMan = mantraForPlanet(planet); // Sanskrit seed — do not translate
 
     const doc = new PDFDocument({ margin: 36, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
@@ -784,7 +918,9 @@ app.post('/report/mantra', async (req, res) => {
 
     applyFont(doc, { lang });
 
-    const titleLine = lang==='hi' ? `मंत्र मार्गदर्शन — ${capSign(sign)}` : `Mantra Guidance — ${capSign(sign)}`;
+    const titleLine = lang==='hi'
+         ? `मंत्र मार्गदर्शन — ${signDisplay(sign, 'hi')}`
+         : `Mantra Guidance — ${capSign(sign)}`;
     const subLine   = `${(user?.name || (lang==='hi'?'मित्र':'Friend'))} • ${dateStr} ${timeStr}`;
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
@@ -794,49 +930,32 @@ app.post('/report/mantra', async (req, res) => {
       dob:user?.dob, tob:user?.time || user?.tob, place:user?.place,
     }});
 
-    // Greeting
     applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(greeting(lang)); applyFont(doc, { lang }); doc.moveDown(0.6);
 
-    // Planetary tone
     const toneHead = lang==='hi' ? 'ग्रह प्रवृत्ति (टोन)' : 'Planetary Tone';
+    const toneText = await tx(lang, 'supportive vibration for balance and progress.');
     const toneLine = lang==='hi'
-      ? `${planet.toUpperCase()} — संतुलन एवं प्रगति हेतु सहायक स्पंदन।`
+      ? `${planet.toUpperCase()} — ${toneText}`
       : `${planet.toUpperCase()} — supportive vibration for balance and progress.`;
     addSection(doc, { lang, heading: toneHead, paragraphs: [toneLine] });
 
-    // Mantra prescription
     const manHead  = lang==='hi' ? 'मुख्य मंत्र' : 'Primary Mantra';
-    const manLine  = seedMan.seed;
+    const manLine  = seedMan.seed; // Sanskrit seed stays as-is
     const schedHead= lang==='hi' ? 'अनुष्ठान / नियम' : 'Practice';
     const sched = lang==='hi'
-      ? [
-          'समय: सूर्योदय या सूर्यास्त; शांत स्थान।',
-          `गणना: ${seedMan.count}× माला (रुद्राक्ष/क्रिस्टल); स्वच्छ उच्चारण।`,
-          'आसन: सुखासन; रीढ़ सीधी; दृष्टि कोमल।',
-          'पूर्व/पश्चात: दीपक/अगरबत्ती; 1 मिनट शांत बैठना।',
-          'साप्ताहिक अनुशंसा: कम-से-कम 4 दिन नियमित।'
-        ]
-      : [
-          'Timing: Sunrise or sunset; a quiet spot.',
-          `Count: ${seedMan.count}× (rudraksha/crystal mala); clear pronunciation.`,
-          'Posture: Comfortable seat; spine tall; soft gaze.',
-          'Before/After: Light a diya/incense; sit quietly for a minute.',
-          'Weekly cadence: at least 4 days regular.'
-        ];
+      ? ['समय: सूर्योदय/सूर्यास्त','गणना: 108×','आसन: रीढ़ सीधी','पूर्व/पश्चात: दीपक/अगरबत्ती','नियम: हफ्ते में 4 दिन+']
+      : ['Timing: Sunrise/Sunset','Count: 108×','Posture: Spine tall','Before/After: diya/incense','Cadence: 4+ days/week'];
     addSection(doc, { lang, heading: manHead, paragraphs: [manLine] });
     addSection(doc, { lang, heading: schedHead, paragraphs: sched });
 
-    // Sankalpa
     const sankHead = lang==='hi' ? 'संकल्प (एक वाक्य)' : 'Sankalpa (intention)';
     const sankLine = lang==='hi'
       ? '“मैं शुद्ध भाव और अनुशासन के साथ जप करता/करती हूँ; मार्ग प्रशस्त हो।”'
       : '“I chant with pure intention and discipline; may right paths open.”';
     addSection(doc, { lang, heading: sankHead, paragraphs: [sankLine] });
 
-    // Power of Mantra
     addSection(doc, { lang, heading: lang==='hi'?'मंत्र की शक्ति':'Power of the Mantra', paragraphs: [powerMantraText(lang)] });
 
-    // Final note + thanks + blessing
     const pol = policyAgent(lang);
     doc.moveDown(0.8);
     applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'अंतिम नोट' : 'Final Note'); applyFont(doc, { lang });
@@ -851,24 +970,22 @@ app.post('/report/mantra', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WEEKLY → PDF (logo/user/greeting once; each day = real DAY, DATE + Vedic)
+// WEEKLY → PDF (await per-day compose)  **FIXED AWAIT HERE**
 // ─────────────────────────────────────────────────────────────────────────────
 app.post('/report/weekly', async (req, res) => {
   try {
     const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
-    const lang = pickLang({ lang: rawLang });
+    const lang = pickLang({ lang: rawLang }, req.headers);
     const start = new Date();
     const { dateStr, timeStr } = toISTParts(start);
 
-    // Build 7 days from the same composer with correct advancing dates
     const days = [];
     const roll = new Date(start);
     for (let i = 0; i < 7; i++) {
-      const d = composeDaily({ sign, lang, now: new Date(roll) });
+      const d = await composeDaily({ sign, lang, now: new Date(roll) });
       days.push({ d, dateObj: new Date(roll) });
       roll.setDate(roll.getDate() + 1);
     }
-
     const doc = new PDFDocument({ margin: 36, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="AstroBaba_Weekly_${sign}_${dateStr}_${lang}.pdf"`);
@@ -880,7 +997,6 @@ app.post('/report/weekly', async (req, res) => {
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
-    // One-time user block + one-time greeting
     addUserBlock(doc, { lang, user: {
       name:user?.name, phone:user?.phone, email:user?.email, gender:user?.gender,
       dob:user?.dob, tob:user?.time || user?.tob, place:user?.place,
@@ -891,34 +1007,23 @@ app.post('/report/weekly', async (req, res) => {
     applyFont(doc, { lang });
     doc.moveDown(0.6);
 
-    // Each day: real DAY, DATE + that day's Vedic timings (12h approximation)
-    days.forEach(({ d, dateObj }, idx) => {
+    for (const { d, dateObj } of days) {
       addSection(doc, { lang, heading: d.header.dayHeader, paragraphs: [] });
-
-      // Vedic timings for that weekday (approx) — shown inline per day
-      const wk = dateObj.getDay(); // 0..6
+      const wk = dateObj.getDay();
       const vt = approxVedicSlots12h(wk);
       addVedicTimings(doc, { lang, timings: vt });
-
       const paras = [
-        d.themeLead,
-        d.luckyLine,
-        '',
-        ...(d.sections.opportunities.map(o=>`• ${o}`)),
-        '',
-        ...(d.sections.cautions.map(c=>`• ${c}`)),
-        '',
+        d.themeLead, d.luckyLine, '',
+        ...(d.sections.opportunities.map(o=>`• ${o}`)), '',
+        ...(d.sections.cautions.map(c=>`• ${c}`)), '',
         (lang==='hi' ? 'उपाय: ' : 'Remedy: ') + d.sections.remedy
       ];
-
       paras.forEach(p => doc.fontSize(12).text(cleanText(p), { paragraphGap: 6, align: 'justify' }));
       doc.moveDown(0.4);
-    });
+    }
 
-    // One-time Vedic note at the end (applies to all 7 tables)
     addVedicNote(doc, { lang });
 
-    // Final note + thanks + blessing (once)
     const pol = policyAgent(lang);
     doc.moveDown(0.8);
     applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(12).text(lang==='hi' ? 'अंतिम नोट' : 'Final Note'); applyFont(doc, { lang });
@@ -930,6 +1035,157 @@ app.post('/report/weekly', async (req, res) => {
 
     doc.pipe(res); doc.end();
   } catch (e) { res.status(500).json({ error: e.message || String(e) }); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// YEARLY → PDF (uses agents if present; else falls back to contentBank)
+// ─────────────────────────────────────────────────────────────────────────────
+app.post('/report/yearly', async (req, res) => {
+  try {
+    const {
+      sign = 'aries',
+      year = null,
+      user = {},
+      brand = {},
+      lang: rawLang,
+      persona = null,
+      anchorDate = null, // e.g. "2026-01-01"
+    } = req.body || {};
+
+    const lang = pickLang({ lang: rawLang }, req.headers);
+    const s = String(sign).toLowerCase();
+    const now = new Date();
+    const { dateStr, timeStr } = toISTParts(now);
+
+    // 1) Get yearly data (agent → fallback)
+    let data;
+    if (typeof getYearlyForUser === 'function') {
+      data = await getYearlyForUser({
+        sign: s,
+        year,
+        user,
+        persona,
+        anchorDate: anchorDate || (year ? `${year}-01-01` : null),
+        lang, // agent may ignore
+      });
+    } else {
+      data = fallbackYearly({
+        sign: s,
+        persona,
+        anchorDate: anchorDate || (year ? `${year}-01-01` : null),
+      });
+    }
+
+    // 2) Normalize & set anchor
+    data = data || {};
+    data.phaseBlocks = data.phaseBlocks || {};
+    data.months = Array.isArray(data.months) ? data.months : [];
+    const anchor = data.anchor
+      ? new Date(data.anchor)
+      : startOfMonthUTC(anchorDate ? new Date(anchorDate) : new Date());
+
+    // 3) Hindi localization (best-effort; safe no-ops if translator missing)
+    if (lang === 'hi') {
+      // blocks (arrays)
+      data.phaseBlocks = Object.fromEntries(
+        await Promise.all(
+          Object.entries(data.phaseBlocks).map(async ([k, arr]) => {
+            const translated = await tx('hi', arr || []);
+            return [k, translated];
+          })
+        )
+      );
+      // months (fields)
+      data.months = await Promise.all(
+        (data.months || []).map(async (m) => ({
+          ...m,
+          label:        await tx('hi', m.label || ''),
+          outlook:      await tx('hi', m.outlook || ''),
+          career:       await tx('hi', m.career || ''),
+          money:        await tx('hi', m.money || ''),
+          relationships:await tx('hi', m.relationships || ''),
+          health:       m.health
+            ? {
+                concerns: await tx('hi', m.health.concerns || ''),
+                tips:     await tx('hi', m.health.tips || ''),
+              }
+            : m.health,
+          learning:     await tx('hi', m.learning || ''),
+          travel:       await tx('hi', m.travel || ''),
+          opportunity:  await tx('hi', m.opportunity || ''),
+          protection:   m.protection
+            ? { text: await tx('hi', m.protection.text || '') }
+            : m.protection,
+          checkpoint:   await tx('hi', m.checkpoint || ''),
+        }))
+      );
+    }
+
+    // 4) Build PDF
+    const doc = new PDFDocument({ margin: 36, bufferPages: true });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="AstroBaba_Yearly_${s}_${year || new Date().getFullYear()}_${lang}.pdf"`
+    );
+
+    applyFont(doc, { lang });
+
+    const titleLine = lang === 'hi'
+      ? `वार्षिक राशिफल — ${signDisplay(s, 'hi')}`
+      : `Yearly Horoscope — ${capSign(s)}`;
+    const subLine = `${user?.name || (lang === 'hi' ? 'मित्र' : 'Friend')} • ${dateStr} ${timeStr}`;
+    const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
+    addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
+
+    addUserBlock(doc, {
+      lang,
+      user: {
+        name: user?.name, phone: user?.phone, email: user?.email, gender: user?.gender,
+        dob: user?.dob, tob: user?.time || user?.tob, place: user?.place,
+      },
+    });
+
+    // Cover: phase blocks overview
+    addSection(doc, {
+      lang,
+      heading: lang === 'hi' ? 'वार्षिक परिदृश्य' : 'Year-at-a-Glance',
+      paragraphs: [],
+    });
+    addPhaseBlocks(doc, { lang, phaseBlocks: data.phaseBlocks });
+
+    // Month pages (12)
+    for (let i = 0; i < 12; i++) {
+      const m = data.months[i] || {};
+      const dt = addMonthsUTC(anchor, i);
+      addMonthPage(doc, { lang, m, dt });
+    }
+
+    // Note + policy
+    addVedicNote(doc, { lang });
+    const pol = policyAgent(lang);
+    doc.moveDown(0.6);
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(12).text(lang === 'hi' ? 'अंतिम नोट' : 'Final Note');
+    applyFont(doc, { lang });
+    doc.moveDown(0.2);
+    doc.fontSize(11).text(pol.disclaimer);
+    doc.moveDown(0.6);
+    doc.fontSize(12).text(pol.thanks);
+    doc.moveDown(0.2);
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(12).text(lang === 'hi' ? BLESS.hi : BLESS.en);
+    applyFont(doc, { lang });
+
+    const Y = year || new Date().getFullYear();
+    doc.moveDown(0.8);
+    doc.fontSize(9).fillColor('#555').text(`© ${Y} ${pol.footerBrand}`, { align: 'center' });
+    doc.fillColor('black');
+
+    doc.pipe(res); doc.end();
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

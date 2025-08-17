@@ -1,24 +1,41 @@
-// Optional: translate to Hindi if OPENAI_API_KEY is set
-export async function translateAgent({ lang='en', lines=[] }) {
-  if (lang !== 'hi') return lines;
-  const key = (process.env.OPENAI_API_KEY || '').trim();
-  if (!key) return lines;
+// agents/translate.js (ESM)
+import OpenAI from "openai";
 
-  const joined = lines.join('\n@@\n');
-  const resp = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
+const hasKey = !!(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim());
+const client = hasKey ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+
+/**
+ * Translate English -> Hindi while preserving numbers, times, bullets,
+ * and NOT translating Sanskrit/proper-noun terms.
+ * If no API key, returns the input unchanged (safe no-op).
+ */
+export async function translateAgent(input, to = "hi") {
+  try {
+    if (!input || to !== "hi" || !client) return input;
+
+    // We call this function with single strings in your server; still normalize to string:
+    const text = Array.isArray(input) ? input.join("\n") : String(input);
+
+    const sys =
+      "You are a precise translator. Translate user content into Hindi (hi-IN). " +
+      "Preserve numbers, punctuation, time ranges (e.g., 12:05–12:52), and bullet symbols. " +
+      "Do NOT translate Sanskrit mantras, and keep proper nouns like Hanuman, Rahu Kaal, Abhijit Muhurat, Surya, etc. " +
+      "Keep formatting and line breaks. Reply with Hindi text only.";
+
+    const resp = await client.chat.completions.create({
+      model: "gpt-4o-mini",
       temperature: 0.2,
       messages: [
-        { role: 'system', content: 'Translate to natural, respectful Hindi (Devanagari). Keep each line intact separated by @@.' },
-        { role: 'user', content: joined }
+        { role: "system", content: sys },
+        { role: "user", content: text }
       ]
-    })
-  });
-  if (!resp.ok) return lines;
-  const data = await resp.json();
-  const out = data?.choices?.[0]?.message?.content || joined;
-  return out.split('@@').map(s => s.trim());
+    });
+
+    const out = resp?.choices?.[0]?.message?.content?.trim();
+    return out || input;
+  } catch {
+    return input; // fail-safe
+  }
 }
+
+export default translateAgent;

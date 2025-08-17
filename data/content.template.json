@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "version": 1,
+    "month": "AUTO",
+    "lang": "en"
+  },
+  "closing": {
+    "en": "Have a blessed day!! We wish you a very cheerful, prosperous and wonderful day ahead with lots of blessings...",
+    "hi": "आपका दिन मंगलमय हो!! हम आपको एक बहुत ही प्रसन्न, समृद्ध और शानदार दिन की शुभकामनाएं देते हैं, ढेर सारी कृपाओं के साथ…"
+  },
+  "vedicNote": {
+    "en": "Note: Vedic windows use a 6:00 AM sunrise and 12-hour day approximation — actual times vary by location/season.",
+    "hi": "सूचना: वैदिक समय 6:00 AM सूर्योदय और 12-घंटे के दिन के अनुमान पर आधारित हैं — वास्तविक समय स्थान/ऋतु के अनुसार बदलता है।"
+  },
+  "personas": ["self_employed","job_working","not_working","homemaker","student"],
+  "daily": {},
+  "weekly": {},
+  "gemstone": {},
+  "mantra": {}
+}

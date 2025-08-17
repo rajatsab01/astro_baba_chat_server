@@ -325,7 +325,8 @@ function addBrandHeader(doc, { lang, brand, titleLine, subLine }) {
   doc.fontSize(18).text(titleLine, titleX, startY + 18);
 
   applyFont(doc, { lang, weight: 'regular' });
-  doc.fontSize(10).fillColor('#444').text(subLine, titleX, startY + 40);
+  const subSafe = String(subLine || '').replace(/^\s*[^0-9]+?\s*•\s*/, '').trim();
+  doc.fontSize(10).fillColor('#444').text(subSafe, titleX, startY + 40);
   doc.fillColor('black').moveDown(1);
 
   doc.moveTo(doc.page.margins.left, doc.y)

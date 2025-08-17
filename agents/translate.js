@@ -1,41 +1,68 @@
-// agents/translate.js (ESM)
-import OpenAI from "openai";
+// agents/translate.js  (ESM)
+// Simple, safe Hindi translator. Uses OpenAI if key exists, else falls back to light dictionary.
 
-const hasKey = !!(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim());
-const client = hasKey ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY }) : null;
+const HAS_KEY = !!(process.env.OPENAI_API_KEY && process.env.OPENAI_API_KEY.trim());
 
-/**
- * Translate English -> Hindi while preserving numbers, times, bullets,
- * and NOT translating Sanskrit/proper-noun terms.
- * If no API key, returns the input unchanged (safe no-op).
- */
-export async function translateAgent(input, to = "hi") {
+// quick no-op if already Hindi
+function isHindi(s) { return /[\u0900-\u097F]/.test(s || ''); }
+
+// tiny dictionary to clean common lines before/without API
+const DICT = [
+  // phrases first
+  [/Well done is better than well said/gi, 'अच्छा किया गया, अच्छा कहा गया से बेहतर है'],
+  [/Focus & Flow/gi, 'केंद्रित रहें • प्रवाह'],
+  [/Auspicious window for beginnings/gi, 'नई शुरुआत के लिए शुभ'],
+  [/Not favourable for new beginnings/gi, 'नई शुरुआत के लिए अनुकूल नहीं'],
+  // words
+  [/\bLearning\b/gi, 'सीख'],
+  [/\bOpportunities?\b/gi, 'अवसर'],
+  [/\bCautions?\b/gi, 'सावधानियाँ'],
+  [/\bRemedy\b/gi, 'उपाय'],
+  [/\bRahu Kaal\b/gi, 'राहु काल'],
+  [/\bYamaganda\b/gi, 'यमगण्ड'],
+  [/\bGulika Kaal\b/gi, 'गुलिक काल'],
+  [/\bAbhijit Muhurat\b/gi, 'अभिजीत मुहूर्त'],
+];
+
+async function translateWithOpenAI(text, to) {
+  // use native fetch; no extra deps
+  const body = {
+    model: 'gpt-4o-mini',
+    temperature: 0.2,
+    messages: [
+      { role: 'system', content: 'You are a precise Hindi translator. Keep proper nouns. No quotes around output.' },
+      { role: 'user', content: `Translate to Hindi (natural, concise, neutral tone):\n${text}` },
+    ],
+  };
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`OpenAI ${res.status}`);
+  const json = await res.json();
+  return (json.choices?.[0]?.message?.content || '').trim();
+}
+
+export async function translateAgent(input, to = 'hi') {
+  if (!input) return input;
+  if (to !== 'hi' || isHindi(input)) return input;
+
+  // pre-clean with dictionary
+  let pre = String(input);
+  for (const [re, rep] of DICT) pre = pre.replace(re, rep);
+
+  if (!HAS_KEY) return pre; // no API → return cleaned
+
   try {
-    if (!input || to !== "hi" || !client) return input;
-
-    // We call this function with single strings in your server; still normalize to string:
-    const text = Array.isArray(input) ? input.join("\n") : String(input);
-
-    const sys =
-      "You are a precise translator. Translate user content into Hindi (hi-IN). " +
-      "Preserve numbers, punctuation, time ranges (e.g., 12:05–12:52), and bullet symbols. " +
-      "Do NOT translate Sanskrit mantras, and keep proper nouns like Hanuman, Rahu Kaal, Abhijit Muhurat, Surya, etc. " +
-      "Keep formatting and line breaks. Reply with Hindi text only.";
-
-    const resp = await client.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: sys },
-        { role: "user", content: text }
-      ]
-    });
-
-    const out = resp?.choices?.[0]?.message?.content?.trim();
-    return out || input;
+    const out = await translateWithOpenAI(pre, 'hi');
+    return out || pre;
   } catch {
-    return input; // fail-safe
+    return pre; // fail-safe
   }
 }
 
-export default translateAgent;
+export default { translateAgent };

@@ -1,117 +1,142 @@
 // agents/translate.js
-// UNIVERSAL translator: Hindi for any incoming text, with caching.
-// Uses OpenAI (OPENAI_API_KEY) and falls back gracefully if the call fails.
+// Minimal universal translator (EN -> HI best-effort) used by server.js
+// - Accepts either translateAgent("text","hi") OR translateAgent({text:"...", to:"hi"})
+// - Returns a STRING (so server's callers work without changes)
 
-const MAX_CACHE = 500;
-const cache = new Map();
-
-/** Evict oldest cache entry when over limit */
-function prune() {
-  if (cache.size <= MAX_CACHE) return;
-  const firstKey = cache.keys().next().value;
-  cache.delete(firstKey);
+function normalizeArgs(input, to) {
+  if (typeof input === 'string') {
+    return { text: input, to: to || 'hi' };
+  }
+  if (input && typeof input === 'object') {
+    return { text: String(input.text ?? ''), to: String(input.to ?? to ?? 'hi') };
+  }
+  return { text: String(input ?? ''), to: to || 'hi' };
 }
 
-/** Normalize whitespace a little (keep markdown/bullets) */
-function tidy(s) {
-  return String(s)
-    .replace(/\r\n/g, '\n')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
+// Phrase bank (add over time as needed)
+const PHRASES = [
+  // Headlines / leads
+  [/^Today favors\s+Health\s*&\s*Balance\s*—\s*pace yourself and hydrate\.?$/i, 'आज स्वास्थ्य और संतुलन के लिए अनुकूल है — गति संयत रखें और जल पिएँ.'],
+  [/^Today favors\s+Learning\s*—\s*one micro-skill compounds quietly\.?$/i, 'आज सीखने के लिए अनुकूल है — एक सूक्ष्म कौशल चुपचाप बढ़त देता है।'],
+  [/^Today favors Momentum.*$/i, 'आज गति के लिए अनुकूल है — पहले कदम स्पष्ट रखें।'],
+
+  // Lucky line fragments
+  [/Lucky color:/gi, 'भाग्यशाली रंग:'],
+  [/Lucky number:/gi, 'भाग्यशाली अंक:'],
+  [/Use Abhijit Muhurat for key actions; avoid Rahu Kaal for fresh launches\./gi,
+   'महत्वपूर्ण कार्यों हेतु अभिजीत मुहूर्त का उपयोग करें; नई शुरुआत के लिए राहु काल से बचें।'],
+
+  // Sections
+  [/Opportunities:/gi, 'अवसर:'],
+  [/Cautions:/gi, 'सावधानियाँ:'],
+  [/Remedy:/gi, 'उपाय:'],
+
+  // Common bullets (opportunities)
+  [/Have one honest check[- ]?in with a key person\.?/gi, 'किसी महत्वपूर्ण व्यक्ति से एक ईमानदार बातचीत करें।'],
+  [/Make a tiny improvement to your budgeting\/saving\.?/gi, 'अपने बजट/बचत में छोटा सुधार करें।'],
+  [/Do a 10[- ]minute inbox trim to lower noise\.?/gi, 'शोर कम करने के लिए 10 मिनट इनबॉक्स साफ़ करें।'],
+
+  // Common bullets (cautions)
+  [/Don’t accept every request — protect a 2[- ]hour deep[- ]work block\.?/gi,
+   'हर अनुरोध न मानें — 2 घंटे का गहन-कार्य खंड सुरक्षित रखें।'],
+  [/Beware emotional emails; sleep on them\.?/gi,
+   'भावनात्मक ईमेल पर तुरंत उत्तर न दें; पहले ठहरें/एक रात सोचें।'],
+  [/Avoid promising timelines you haven’t pressure[- ]tested\.?/gi,
+   'जिन समयसीमाओं का परीक्षण नहीं किया है, उनका वादा न करें।'],
+
+  // Remedies (keep mantra as-is)
+  [/At dusk, light a diya and chant “?Om Namah Shivaya”? 11×\.?/gi,
+   'संध्या में दीपक जलाएँ और “ॐ नमः शिवाय” 11 बार जप करें।'],
+
+  // Quote/affirmation/mood (common)
+  [/“The best way out is always through.” — Robert Frost/gi,
+   '“बाहर निकलने का सबसे अच्छा तरीका होता है–सीधे होकर निकलना।” — रॉबर्ट फ़्रॉस्ट'],
+  [/I move with calm focus and steady courage\./gi,
+   'मैं शांत एकाग्रता और स्थिर साहस के साथ आगे बढ़ता/बढ़ती हूँ।'],
+  [/Open and kind — your warmth attracts support\./gi,
+   'खुले और दयालु रहें — आपकी गर्मजोशी सहयोग को आकर्षित करती है।'],
+
+  // Day deity lines (server already localizes many, but keep fallbacks)
+  [/^Today being\s+Surya\/Aditya\s+day\.$/gi, 'आज सूर्य/आदित्य दिवस है।'],
+  [/^Today being\s+Shiva\/Som\s+day\.$/gi, 'आज शिव/सोम दिवस है।'],
+];
+
+// Word/phrase level replacements
+const REPLACEMENTS = [
+  [/^Today favors\s+/gi, 'आज अनुकूल है '],
+  [/Health\s*&\s*Balance/gi, 'स्वास्थ्य और संतुलन'],
+  [/pace yourself/gi, 'गति संयत रखें'],
+  [/hydrate/gi, 'जल पिएँ'],
+
+  [/micro[- ]skill/gi, 'सूक्ष्म कौशल'],
+  [/deep[- ]work/gi, 'गहन कार्य'],
+  [/check[- ]in/gi, 'बातचीत'],
+  [/inbox\s*trim/gi, 'इनबॉक्स साफ़'],
+
+  [/Avoid/gi, 'बचें'],
+  [/Don’t/gi, 'न करें'],
+  [/Beware/gi, 'सावधान रहें'],
+];
+
+// Clean-ups for Hinglish leftovers
+function cleanHi(s) {
+  let out = s;
+
+  // Apply phrase-level exact/regex matches first
+  for (const [pattern, hi] of PHRASES) {
+    out = out.replace(pattern, hi);
+  }
+  // Then word/fragment-level replacements
+  for (const [pattern, hi] of REPLACEMENTS) {
+    out = out.replace(pattern, hi);
+  }
+
+  // Minor tidy-ups
+  out = out
+    .replace(/\s+—\s+/g, ' — ')
+    .replace(/\s+/g, match => match.includes('\n') ? match : ' ')
+    .replace(/\. \./g, '.')
     .trim();
+
+  return out;
 }
 
-/** Build a single prompt instructing rock-solid, domain-aware translation */
-function buildMessages(text) {
-  const system =
-    "You are a precise Hindi translator for an astrology app. Translate to NATURAL, CLEAR Hindi only. " +
-    "Preserve meaning, tone, and intent. Keep formatting (markdown **bold**, lists with '-' bullets, em dashes —). " +
-    "Keep mantras and seed sounds in Sanskrit as-is (e.g., “Om Namah Shivaya”, “Om Graam Greem Graum…”). " +
-    "Leave placeholders like {name}, {{var}}, <b> tags, and emojis unchanged. " +
-    "Prefer widely used Hindi terms:\n" +
-    "- Rahu Kaal → राहु काल, Yamaganda → यमगण्ड, Gulika Kaal → गुलिक काल, Abhijit Muhurat → अभिजीत मुहूर्त.\n" +
-    "- Money/budget → बजट, save/saving → बचत, inbox → इनबॉक्स, micro-skill → सूक्ष्म कौशल.\n" +
-    "Keep numbers and times (e.g., 12:05–12:52, 108×) as-is. " +
-    "Do NOT add extra commentary. Output ONLY the translated text.";
-  const user = `Translate to Hindi:\n\n${text}`;
-  return [
-    { role: "system", content: system },
-    { role: "user", content: user },
-  ];
+async function translateOne(text, to) {
+  if (!text || to !== 'hi') return text;
+  // Best-effort: try phrase bank + cleanups
+  return cleanHi(String(text));
 }
 
-/** Core translator */
-export async function translateAgent(input, to = "hi") {
-  if (input == null) return input;
+export async function translateAgent(input, to) {
+  const { text, to: lang } = normalizeArgs(input, to);
 
-  // If not Hindi, pass-through (we only handle 'hi' today)
-  if (to !== "hi") return input;
+  // Strings
+  if (typeof text === 'string') {
+    return await translateOne(text, lang);
+  }
 
-  // Array support
-  if (Array.isArray(input)) {
+  // Arrays
+  if (Array.isArray(text)) {
     const out = [];
-    for (const item of input) out.push(await translateAgent(item, to));
+    for (const t of text) out.push(await translateOne(t, lang));
     return out;
   }
 
-  // Primitive → string
-  const text = String(input);
-  const key = `hi:${text}`;
-
-  // Cache hit
-  if (cache.has(key)) return cache.get(key);
-
-  // Fast-path: empty/short punctuation
-  if (!text.trim() || /^[\-\*\s•.]+$/.test(text)) {
-    cache.set(key, text);
-    return text;
-  }
-
-  // Call OpenAI
-  let translated = text;
-  try {
-    const messages = buildMessages(text);
-    const resp = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY || ""}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "gpt-4o-mini",
-        temperature: 0.2,
-        messages,
-      }),
-    });
-
-    if (resp.ok) {
-      const data = await resp.json();
-      const out = data?.choices?.[0]?.message?.content ?? "";
-      translated = out ? tidy(out) : text;
-    } else {
-      // Non-200 → graceful fallback (return original)
-      translated = text;
+  // Objects (rare) — translate leaf strings
+  if (text && typeof text === 'object') {
+    const clone = Array.isArray(text) ? [] : {};
+    for (const k of Object.keys(text)) {
+      const v = text[k];
+      if (typeof v === 'string') clone[k] = await translateOne(v, lang);
+      else if (Array.isArray(v)) clone[k] = await Promise.all(v.map(it => translateOne(it, lang)));
+      else clone[k] = v;
     }
-  } catch {
-    // Network/other error → graceful fallback (return original)
-    translated = text;
+    // Server expects a string or {text: "..."} if not a string; return {text: "..."} for safety
+    return { text: JSON.stringify(clone) };
   }
 
-  // Light cleanups that frequently appear in mixed outputs
-  translated = translated
-    .replace(/\bToday favors\b/gi, "आज अनुकूल है")
-    .replace(/\bmicro[- ]skill\b/gi, "सूक्ष्म कौशल")
-    .replace(/\binbox trim\b/gi, "इनबॉक्स साफ़")
-    .replace(/\bhydrate\b/gi, "जल पिएँ")
-    .replace(/Rahu Kaal/gi, "राहु काल")
-    .replace(/Yamaganda/gi, "यमगण्ड")
-    .replace(/Gulika Kaal/gi, "गुलिक काल")
-    .replace(/Abhijit Muhurat/gi, "अभिजीत मुहूर्त")
-    .replace(/\s+—\s+/g, " — ");
-
-  cache.set(key, translated);
-  prune();
-  return translated;
+  return String(text ?? '');
 }
 
+// Export default for ESM default import compatibility
 export default translateAgent;

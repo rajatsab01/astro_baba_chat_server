@@ -1,0 +1,59 @@
+{
+  "protect": [
+    "Om Namah Shivaya",
+    "ॐ",
+    "Surya/Aditya",
+    "Shiva/ Soma",
+    "Shiva/Soma"
+  ],
+  "exact": {
+    "Have one honest check-in with a key person.": "किसी महत्वपूर्ण व्यक्ति से एक ईमानदार बातचीत करें।",
+    "Make a tiny improvement to your budgeting/saving.": "अपने बजट/बचत में एक छोटा सुधार करें।",
+    "Do a 10-minute inbox trim to lower noise.": "शोर कम करने के लिए 10 मिनट इनबॉक्स साफ़/छाँटें।",
+    "Draft a quick 3–6-month outline so today fits a bigger arc.": "आज के कार्य बड़े लक्ष्य में फिट हों — 3–6 महीने की एक त्वरित रूपरेखा बनाएं।",
+
+    "Don’t accept every request — protect a 2-hour deep-work block.": "हर अनुरोध स्वीकार न करें — 2 घंटे का गहन-कार्य ब्लॉक सुरक्षित रखें।",
+    "Beware emotional emails; sleep on them.": "भावनात्मक ईमेल से सावधान रहें; उत्तर देने से पहले रात भर रुकें।",
+    "Avoid promising timelines you haven’t pressure-tested.": "जिन समयसीमाओं का परीक्षण नहीं किया है, उनका वादा करने से बचें।",
+
+    "At dusk, light a diya and chant “Om Namah Shivaya” 11×.": "संध्या समय एक दिया जलाएँ और “ॐ नमः शिवाय” 11 बार जप करें.",
+    "Open and kind — your warmth attracts support.": "खुले और नम्र रहें — आपकी आत्मीयता समर्थन आकर्षित करेगी.",
+    "I move with calm focus and steady courage.": "मैं शांत एकाग्रता और स्थिर साहस के साथ आगे बढ़ता/बढ़ती हूँ."
+  },
+  "regex": [
+    [
+      "^Today favors\\s+Health\\s*&\\s*Balance\\s*—\\s*(?:pace yourself(?: and)?\\s*)?(?:hydrate|जल पिएँ)\\.?$",
+      "आज स्वास्थ्य और संतुलन के लिए अनुकूल है — अपनी गति संतुलित रखें और जल पिएँ।",
+      "i"
+    ],
+    [
+      "^Today favors\\s+Learning\\s*—\\s*one micro-skill compounds quietly\\.?$",
+      "आज सीखने के लिए अनुकूल है — एक सूक्ष्म कौशल चुपचाप संचित होता है।",
+      "i"
+    ],
+    [
+      "^Today favors\\s+(.+?)\\s*—\\s*(.+)$",
+      "आज $1 के लिए अनुकूल है — $2.",
+      "i"
+    ]
+  ],
+  "tokens": {
+    "Health & Balance": "स्वास्थ्य और संतुलन",
+    "Momentum": "गति",
+    "Learning": "सीखना",
+    "Relationships": "संबंध",
+    "Gains": "लाभ",
+    "Fun": "मज़ा",
+    "Opportunities": "अवसर",
+    "Cautions": "सावधानियाँ",
+
+    "pace yourself": "अपनी गति संतुलित रखें",
+    "hydrate": "जल पिएँ",
+    "key person": "महत्वपूर्ण व्यक्ति",
+    "budgeting/saving": "बजट/बचत",
+    "inbox trim": "इनबॉक्स साफ़/छाँटें",
+    "deep-work block": "गहन-कार्य ब्लॉक",
+    "emails": "ईमेल",
+    "sleep on them": "रात भर रुकें"
+  }
+}

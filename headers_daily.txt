@@ -1,0 +1,19 @@
+HTTP/1.1 200 OK
+Date: Mon, 18 Aug 2025 18:17:27 GMT
+Content-Type: application/pdf
+Transfer-Encoding: chunked
+Connection: keep-alive
+access-control-allow-origin: *
+Cache-Control: no-store
+content-disposition: attachment; filename="AstroBaba_Daily_aries_2025-08-18_hi.pdf"
+expires: 0
+pragma: no-cache
+rndr-id: 5572e6a5-f8f2-4d73
+x-ab-build: 2025-08-17.04
+x-powered-by: Express
+x-render-origin-server: Render
+cf-cache-status: DYNAMIC
+Server: cloudflare
+CF-RAY: 971368590ed11b69-DEL
+alt-svc: h3=":443"; ma=86400
+

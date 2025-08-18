@@ -104,61 +104,81 @@ async function toLangList(arr, lang) {
   return out;
 }
 
-// Translate a composeDaily() payload deeply where agents may be EN-only
-// --- Post-translate cleanup for Hindi (replace common Hinglish/English) ---
+// --- Post-translate cleanup for Hindi (Hinglish→Hindi + typos + weekly lines) ---
 function cleanHi(s) {
   if (!s) return s;
   let out = String(s);
 
-  // OCR/ligature glitches
-  out = out.replace(/ईर्मेल/g, 'ईमेल')
-           .replace(/ईर्मानदार/g, 'ईमानदार')
-           .replace(/गमर्जोशी/g, 'गर्मजोशी')
-           .replace(/कायर्/g, 'कार्य')
-           .replace(/समयसीमाआें/g, 'समयसीमाओं');
+  // ── WEEKLY THEMES & LINES (EN → HI) ───────────────────────────────────
+  out = out.replace(/Stewardship\s*&\s*Savings/gi, 'संरक्षण और बचत');
+  out = out.replace(/tighten one small leak/gi, 'एक छोटी रिसाव बंद करें');
 
-  // Weekly phrase-level normalizations
-  out = out.replace(/Stewardship\s*&\s*Savings/gi, 'संरक्षण और बचत')
-           .replace(/tighten one small leak/gi, 'एक छोटी रिसाव बंद करें')
-           .replace(/Creative\s*Spark/gi, 'रचनात्मक चिंगारी')
-           .replace(/test a playful idea quickly/gi, 'एक खिलंदड़े विचार को जल्दी परखें')
-           .replace(/Relationship\s*Warmth/gi, 'संबंधों में ऊष्मा')
-           .replace(/short honest (conversations?|बातचीत)s? go far/gi, 'छोटी ईमानदार बातचीत बहुत असर करती है')
-           .replace(/Pragmatic\s*Care/gi, 'व्यावहारिक देखभाल')
-           .replace(/body,\s*sleep,\s*budgeting,\s*tiny wins/gi, 'शरीर, नींद, बजट, छोटे-छोटे जीत')
-           .replace(/Learn one micro[- ]skill you[’']?ll reuse this week/gi, 'एक सूक्ष्म कौशल सीखें जिसे आप इस सप्ताह फिर उपयोग करेंगे')
-           .replace(/Journal one page to clear mental fog/gi, 'मानसिक धुंध हटाने के लिए एक पृष्ठ जर्नल लिखें')
-           .replace(/Skip unplanned purchases sparked by mood/gi, 'मूड में की गई अनियोजित खरीद से बचें')
-           .replace(/Limit multitasking during crucial work/gi, 'महत्वपूर्ण काम के दौरान मल्टीटास्किंग सीमित रखें')
-           .replace(/Don[’']?t overfill the calendar\s*[—–-]\s*leave white space/gi, 'कैलेंडर मत ठूँसें — थोड़ा खाली समय छोड़ें')
-           .replace(/let perfect kill good\s*[—–-]\s*ship version (one|1)/gi, 'पूर्णता के लालच में अच्छे को मत मारें — संस्करण 1 जारी करें')
-           .replace(/Before work, chant “?Om Gam Ganapataye”?\s*21× for obstacle clearing/gi, 'कार्य से पहले “ॐ गं गणपतये” 21 बार जप करें — विघ्न शमन हेतु')
-           .replace(/At sunset, read a few names from Vishnu Sahasranama; offer chana dal\s*&\s*turmeric/gi, 'सूर्यास्त पर विष्णु सहस्रनाम के कुछ नाम पढ़ें; चना दाल और हल्दी अर्पित करें')
-           .replace(/Light a (pleasant )?fragrance; recite Sri Suktam or express gratitude for sufficiency/gi, 'सुगंधित धूप/दीप जलाएँ; श्री सूक्त का पाठ करें या पर्याप्तता के लिए कृतज्ञता व्यक्त करें')
-           .replace(/Ship one starter task before lunch to unlock afternoon flow/gi, 'दोपहर भोजन से पहले एक प्रारंभिक काम पूरा करें ताकि दोपहर का प्रवाह खुले')
-           .replace(/At sunrise, face east and offer gratitude to the Sun; keep 2 minutes of stillness/gi, 'सूर्योदय पर पूर्वमुख होकर सूर्य को कृतज्ञता अर्पित करें; 2 मिनट शांत बैठें')
-           .replace(/Avoid promising timelines you haven[’']?t pressure-tested/gi, 'जिन समयसीमाओं का परीक्षण नहीं किया है, उनका वादा न करें')
-           .replace(/Beware emotional emails; sleep on them/gi, 'भावनात्मक ईमेल पर तुरंत जवाब न दें; पहले ठहरें/रात भर सोचें')
-           .replace(/Don[’']?t accept every request\s*[—–-]\s*protect a 2-hour deep-work block/gi, 'हर अनुरोध न मानें — 2 घंटे का गहन-कार्य खंड सुरक्षित रखें')
-           .replace(/late-?night screens/gi, 'रात देर तक स्क्रीन');
+  out = out.replace(/Creative\s*Spark/gi, 'रचनात्मक चिंगारी');
+  out = out.replace(/test a playful idea quickly/gi, 'एक खिलंदड़े विचार को जल्दी परखें');
 
-  // Older fixes & word-level Hinglish → Hindi
-  out = out.replace(/परफेक्ट.*गुड.*वर्जन.*वन/gi, 'पूर्णता के लालच में अच्छे को मत मारें — संस्करण 1 जारी करें।')
-           .replace(/स्थिर\s*बीट्स\s*चमकीले/gi, 'स्थिरता दिखावे से बेहतर')
-           .replace(/बीट्स\s*चमक(दार|ीले)/gi, 'दिखावे से बेहतर')
-           .replace(/ग्राउंड\s*और\s*दीप्ति/gi, 'स्थिरता और दीप्ति')
-           .replace(/(जहाज़|जहाज|शिप)\s*संस्करण\s*1/gi, 'संस्करण 1 जारी करें')
-           .replace(/संपूर्णता/gi, 'पूर्णता')
-           .replace(/अच्छाई\s*को/gi, 'अच्छे को')
-           .replace(/इनबॉक्स\s*ट्रिम/gi, 'इनबॉक्स साफ़ करें')
-           .replace(/ट्रिम/gi, 'छाँटें')
-           .replace(/परफेक्ट/gi, 'पूर्णता')
-           .replace(/\bगुड\b/gi, 'अच्छा')
-           .replace(/शिप/gi, 'जारी करें')
-           .replace(/वर्जन\s*वन/gi, 'संस्करण 1')
-           .replace(/माइक्रो[- ]स्किल/gi, 'सूक्ष्म कौशल')
-           .replace(/ग्राउंड/gi, 'स्थिर')
-           .replace(/ग्लो/gi, 'दीप्ति');
+  out = out.replace(/Relationship\s*Warmth/gi, 'संबंधों में ऊष्मा');
+  out = out.replace(/short honest (?:conversations?|बातचीत)s? go far/gi, 'छोटी ईमानदार बातचीत बहुत असर करती है');
+
+  out = out.replace(/Pragmatic\s*Care/gi, 'व्यावहारिक देखभाल');
+  out = out.replace(/body,\s*sleep,\s*budgeting,\s*tiny wins/gi, 'शरीर, नींद, बजट, छोटी-छोटी जीत');
+
+  out = out.replace(/Learn one micro[- ]skill you[’']?ll reuse this week/gi, 'एक सूक्ष्म कौशल सीखें जिसे आप इस सप्ताह फिर उपयोग करेंगे');
+  out = out.replace(/Journal one page to clear mental fog/gi, 'मानसिक धुंध हटाने के लिए एक पृष्ठ जर्नल लिखें');
+
+  out = out.replace(/Skip unplanned purchases sparked by mood/gi, 'मूड में की गई अनियोजित खरीद से बचें');
+  out = out.replace(/Limit multitasking during crucial work/gi, 'महत्वपूर्ण काम के दौरान मल्टीटास्किंग सीमित रखें');
+  out = out.replace(/Don[’']?t overfill the calendar\s*—\s*leave white space/gi, 'कैलेंडर मत ठूँसें — थोड़ा खाली समय छोड़ें');
+
+  out = out.replace(/Invest 20 minutes in a health micro[- ]habit/gi, 'स्वास्थ्य की एक सूक्ष्म आदत में 20 मिनट लगाएँ');
+  out = out.replace(/Touch base with a senior\/mentor for a 30[- ]sec checkpoint/gi, 'किसी वरिष्ठ\/मार्गदर्शक से 30-सेकंड का चेकपॉइंट लें');
+  out = out.replace(/Draft a quick 3[–-]6[- ]month outline so today fits a bigger arc/gi, 'आज को बड़े प्रवाह में फिट करने के लिए 3–6 माह की एक त्वरित रूपरेखा बनाएँ');
+  out = out.replace(/Polish one thing already working instead of adding new/gi, 'जो काम चल रहा है उसी को थोड़ा और सँवारें — नया जोड़ने से बेहतर');
+
+  out = out.replace(/Before work, chant “?Om Gam Ganapataye”? ?21× for obstacle clearing/gi, 'कार्य से पहले “ॐ गं गणपतये” 21 बार जप करें — विघ्न शमन हेतु');
+  out = out.replace(/At sunset, read a few names from Vishnu Sahasranama; offer chana dal\s*&\s*turmeric/gi, 'सूर्यास्त पर विष्णु सहस्रनाम के कुछ नाम पढ़ें; चना दाल और हल्दी अर्पित करें');
+  out = out.replace(/Light a (?:pleasant )?fragrance; recite Sri Suktam or express gratitude for sufficiency/gi, 'सुगंधित धूप\/दीप जलाएँ; श्री सूक्त का पाठ करें या पर्याप्तता के लिए कृतज्ञता व्यक्त करें');
+  out = out.replace(/Ship one starter task before lunch to unlock afternoon flow/gi, 'दोपहर भोजन से पहले एक प्रारंभिक काम पूरा करें ताकि दोपहर का प्रवाह खुले');
+  out = out.replace(/At sunrise, face east and offer gratitude to the Sun; keep 2 minutes of stillness/gi, 'सूर्योदय पर पूर्वमुख होकर सूर्य को कृतज्ञता अर्पित करें; 2 मिनट शांत बैठें');
+  out = out.replace(/At sunset, chant Hanuman Chalisa; keep conduct calm and fair/gi, 'सूर्यास्त पर हनुमान चालीसा जपें; आचरण शांत और न्यायपूर्ण रखें');
+  out = out.replace(/In the evening, recite Hanuman Chalisa once; offer a little sesame oil/gi, 'संध्या में हनुमान चालीसा एक बार पढ़ें; थोड़ा तिल का तेल अर्पित करें');
+
+  out = out.replace(/late-?night screens/gi, 'रात देर तक स्क्रीन');
+
+  // ── OCR/LIGATURE & COMMON TYPO FIXES ──────────────────────────────────
+  out = out.replace(/ईर्मेल/g, 'ईमेल');
+  out = out.replace(/ईर्मानदार/g, 'ईमानदार');
+  out = out.replace(/गमर्जोशी/g, 'गर्मजोशी');
+  out = out.replace(/कायर्/g, 'कार्य');
+  out = out.replace(/समयसीमाआें/g, 'समयसीमाओं');
+  out = out.replace(/मानिसक/g, 'मानसिक');
+  out = out.replace(/जनर्ल/g, 'जर्नल');
+  out = out.replace(/अिपंत/g, 'अर्पित');
+  out = out.replace(/पयार्प्तता/g, 'पर्याप्तता');
+  out = out.replace(/सूयार्स्त/g, 'सूर्यास्त');
+  out = out.replace(/सूयार्दय/g, 'सूर्योदय');
+  out = out.replace(/संबंधाें/g, 'संबंधों');
+  out = out.replace(/िरसाव/g, 'रिसाव');
+
+  // ── GENERAL HINGLISH NORMALIZATIONS (kept) ───────────────────────────
+  out = out.replace(/परफेक्ट.*गुड.*वर्जन.*वन/gi, 'पूर्णता के लालच में अच्छे को मत मारें — संस्करण 1 जारी करें।');
+  out = out.replace(/स्थिर\s*बीट्स\s*चमकीले/gi, 'स्थिरता दिखावे से बेहतर');
+  out = out.replace(/बीट्स\s*चमक(दार|ीले)/gi, 'दिखावे से बेहतर');
+  out = out.replace(/ग्राउंड\s*और\s*दीप्ति/gi, 'स्थिरता और दीप्ति');
+
+  out = out.replace(/(जहाज़|जहाज|शिप)\s*संस्करण\s*1/gi, 'संस्करण 1 जारी करें');
+  out = out.replace(/संपूर्णता/gi, 'पूर्णता');
+  out = out.replace(/अच्छाई\s*को/gi, 'अच्छे को');
+
+  out = out.replace(/इनबॉक्स\s*ट्रिम/gi, 'इनबॉक्स साफ़ करें');
+  out = out.replace(/ट्रिम/gi, 'छाँटें');
+
+  out = out.replace(/परफेक्ट/gi, 'पूर्णता');
+  out = out.replace(/\bगुड\b/gi, 'अच्छा');
+  out = out.replace(/शिप/gi, 'जारी करें');
+  out = out.replace(/वर्जन\s*वन/gi, 'संस्करण 1');
+  out = out.replace(/माइक्रो[- ]स्किल/gi, 'सूक्ष्म कौशल');
+  out = out.replace(/ग्राउंड/gi, 'स्थिर');
+  out = out.replace(/ग्लो/gi, 'दीप्ति');
 
   return out;
 }
@@ -1256,6 +1276,80 @@ app.post('/report/yearly', async (req, res) => {
     doc.fillColor('black');
 
     doc.pipe(res); doc.end();
+  } catch (e) {
+    res.status(500).json({ error: e.message || String(e) });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CACHE BOT: prefetch next N days (12 signs × langs) and save to disk
+// Files: data/cache/daily/YYYY-MM-DD/<sign>.<lang>.json
+// ─────────────────────────────────────────────────────────────────────────────
+const SIGNS_ALL = [
+  'aries','taurus','gemini','cancer','leo','virgo',
+  'libra','scorpio','sagittarius','capricorn','aquarius','pisces'
+];
+
+function cacheDailyPath(dateStr, sign, lang) {
+  return path.join(__dirname, 'data', 'cache', 'daily', dateStr, `${sign}.${lang}.json`);
+}
+async function ensureDirFor(filePath) {
+  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+}
+function dateAddDaysIST(baseDateStr, add) {
+  const iso = `${baseDateStr}T12:00:00+05:30`;
+  const d = new Date(iso);
+  d.setDate(d.getDate() + add);
+  const { ist } = toISTParts(d);
+  const y = ist.getFullYear();
+  const m = String(ist.getMonth() + 1).padStart(2, '0');
+  const day = String(ist.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+async function buildDaily(sign, lang, dateStr) {
+  const now = new Date(`${dateStr}T12:00:00+05:30`);
+  const rich = await composeDaily({ sign, lang, now });
+  return { date: rich.date, sign: rich.sign, lang: rich.lang, rich };
+}
+
+app.post('/cron/prewarm-daily', async (req, res) => {
+  try {
+    const days  = Math.max(1, Math.min(31, parseInt(req.query.days || '8', 10)));
+    const langs = (req.query.langs || 'en,hi').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const signs = (req.query.signs || SIGNS_ALL.join(',')).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const { dateStr: todayIST } = toISTParts(new Date());
+
+    const results = [];
+    for (let d = 0; d < days; d++) {
+      const dateStr = dateAddDaysIST(todayIST, d);
+      for (const lang of langs) {
+        for (const sign of signs) {
+          const item = await buildDaily(sign, lang, dateStr);
+          const file = cacheDailyPath(dateStr, sign, lang);
+          await ensureDirFor(file);
+          await fs.promises.writeFile(file, JSON.stringify(item, null, 2), 'utf8');
+          results.push({ date: dateStr, sign, lang, file: path.relative(__dirname, file) });
+        }
+      }
+    }
+    res.json({ ok: true, cached: results.length, details: results.slice(0, 5), note: 'saved under data/cache/daily/...' });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message || String(e) });
+  }
+});
+
+app.get('/cache/daily', async (req, res) => {
+  try {
+    const date = (req.query.date || '').trim();
+    const sign = (req.query.sign || '').trim().toLowerCase();
+    const lang = (req.query.lang || 'en').trim().toLowerCase();
+    if (!date || !sign) return res.status(400).json({ error: 'date and sign required' });
+
+    const file = cacheDailyPath(date, sign, lang);
+    if (!fs.existsSync(file)) return res.status(404).json({ error: 'not cached', file: path.relative(__dirname, file) });
+
+    const json = JSON.parse(await fs.promises.readFile(file, 'utf8'));
+    res.json(json);
   } catch (e) {
     res.status(500).json({ error: e.message || String(e) });
   }

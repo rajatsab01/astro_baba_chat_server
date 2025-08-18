@@ -1028,15 +1028,16 @@ app.post('/report/weekly', async (req, res) => {
         hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Kolkata'
       }) + (lang === 'hi' ? ' बजे' : ' IST');
 
-    // Compose 7 days (awaited) — same sign/lang, rolling date
+    // build 7 days, prefer cache; fallback to live compose
     const days = [];
     const roll = new Date(start);
     for (let i = 0; i < 7; i++) {
-      const d = await composeDaily({ sign, lang, now: new Date(roll) });
+      const yyyyMmDd = roll.toISOString().slice(0, 10);
+      const cached = loadCachedDaily(yyyyMmDd, sign, lang); // from cache helpers
+      const d = cached?.rich || await composeDaily({ sign, lang, now: new Date(roll) });
       days.push({ d, dateObj: new Date(roll) });
       roll.setDate(roll.getDate() + 1);
     }
-
     const doc = new PDFDocument({ margin: 36, bufferPages: true });
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader(
@@ -1282,77 +1283,82 @@ app.post('/report/yearly', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CACHE BOT: prefetch next N days (12 signs × langs) and save to disk
-// Files: data/cache/daily/YYYY-MM-DD/<sign>.<lang>.json
+// DAILY CACHE BOT: prewarm & fetch
 // ─────────────────────────────────────────────────────────────────────────────
-const SIGNS_ALL = [
+const dailyCache = globalThis.__AB_DAILY_CACHE__ || new Map();
+globalThis.__AB_DAILY_CACHE__ = dailyCache;
+
+const ALL_SIGNS = [
   'aries','taurus','gemini','cancer','leo','virgo',
   'libra','scorpio','sagittarius','capricorn','aquarius','pisces'
 ];
 
-function cacheDailyPath(dateStr, sign, lang) {
-  return path.join(__dirname, 'data', 'cache', 'daily', dateStr, `${sign}.${lang}.json`);
-}
-async function ensureDirFor(filePath) {
-  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-}
-function dateAddDaysIST(baseDateStr, add) {
-  const iso = `${baseDateStr}T12:00:00+05:30`;
-  const d = new Date(iso);
-  d.setDate(d.getDate() + add);
-  const { ist } = toISTParts(d);
-  const y = ist.getFullYear();
-  const m = String(ist.getMonth() + 1).padStart(2, '0');
-  const day = String(ist.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-async function buildDaily(sign, lang, dateStr) {
-  const now = new Date(`${dateStr}T12:00:00+05:30`);
-  const rich = await composeDaily({ sign, lang, now });
-  return { date: rich.date, sign: rich.sign, lang: rich.lang, rich };
+function cacheKey(dateStr, sign, lang) {
+  return `${dateStr}|${sign}|${lang}`;
 }
 
-app.post('/cron/prewarm-daily', async (req, res) => {
+// GET /cron/prewarm-daily?days=8&langs=en,hi
+app.get('/cron/prewarm-daily', async (req, res) => {
   try {
-    const days  = Math.max(1, Math.min(31, parseInt(req.query.days || '8', 10)));
-    const langs = (req.query.langs || 'en,hi').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-    const signs = (req.query.signs || SIGNS_ALL.join(',')).split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-    const { dateStr: todayIST } = toISTParts(new Date());
+    const days  = Math.max(1, parseInt(req.query.days || '8', 10));
+    const langs = String(req.query.langs || 'en,hi')
+      .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-    const results = [];
-    for (let d = 0; d < days; d++) {
-      const dateStr = dateAddDaysIST(todayIST, d);
-      for (const lang of langs) {
-        for (const sign of signs) {
-          const item = await buildDaily(sign, lang, dateStr);
-          const file = cacheDailyPath(dateStr, sign, lang);
-          await ensureDirFor(file);
-          await fs.promises.writeFile(file, JSON.stringify(item, null, 2), 'utf8');
-          results.push({ date: dateStr, sign, lang, file: path.relative(__dirname, file) });
+    const startedAt = new Date().toISOString();
+    let inserted = 0;
+
+    const start = new Date();
+    for (let offset = 0; offset < days; offset++) {
+      const dt = new Date(start);
+      dt.setDate(dt.getDate() + offset);
+      const { dateStr } = toISTParts(dt);
+
+      for (const sign of ALL_SIGNS) {
+        for (const lang of langs) {
+          const d = await composeDaily({ sign, lang, now: dt });
+          dailyCache.set(cacheKey(dateStr, sign, lang), d);
+          inserted++;
         }
       }
     }
-    res.json({ ok: true, cached: results.length, details: results.slice(0, 5), note: 'saved under data/cache/daily/...' });
+
+    res.json({
+      ok: true,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      days,
+      langs,
+      inserted,
+      cacheSize: dailyCache.size,
+    });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message || String(e) });
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
   }
 });
 
-app.get('/cache/daily', async (req, res) => {
-  try {
-    const date = (req.query.date || '').trim();
-    const sign = (req.query.sign || '').trim().toLowerCase();
-    const lang = (req.query.lang || 'en').trim().toLowerCase();
-    if (!date || !sign) return res.status(400).json({ error: 'date and sign required' });
+// GET /cache/daily?date=YYYY-MM-DD&sign=aries&lang=hi
+app.get('/cache/daily', (req, res) => {
+  const sign = String(req.query.sign || 'aries').toLowerCase();
+  const lang = pickLang({ lang: req.query.lang }, req.headers);
+  const date = req.query.date || toISTParts(new Date()).dateStr;
 
-    const file = cacheDailyPath(date, sign, lang);
-    if (!fs.existsSync(file)) return res.status(404).json({ error: 'not cached', file: path.relative(__dirname, file) });
-
-    const json = JSON.parse(await fs.promises.readFile(file, 'utf8'));
-    res.json(json);
-  } catch (e) {
-    res.status(500).json({ error: e.message || String(e) });
+  const hit = dailyCache.get(cacheKey(date, sign, lang));
+  if (!hit) {
+    return res.status(404).json({
+      ok: false,
+      miss: { date, sign, lang },
+      hint: '/cron/prewarm-daily?days=8&langs=en,hi'
+    });
   }
+  res.json({
+    ok: true,
+    date: hit.date,
+    sign: hit.sign,
+    lang: hit.lang,
+    text: hit.text,
+    vedic: hit.vedic,
+    rich: hit,
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

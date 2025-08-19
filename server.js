@@ -8,7 +8,7 @@ import { fileURLToPath } from 'url';
 
 // agents (unchanged external files)
 import contentBank from './agents/contentBank.js';
-import { hashCode, toISTParts, cleanText, capSign, cleanHi, cleanHiList } from './agents/utils.js';
+import { hashCode, toISTParts, cleanText, capSign, cleanHi, cleanHiList, fmtTimeIST, fmtSubLine } from './agents/utils.js';
 import { policyAgent } from './agents/policy.js';
 import { dayDeityAgent } from './agents/dayDeity.js';
 import { specialDayAgent } from './agents/specialDay.js';
@@ -130,13 +130,7 @@ function getVedicNames(lang = 'en') {
   };
 }
 
-// Unified date+time line for headers (prevents Devanagari matra clipping)
-function fmtSubLine(dateStr, timeStr, lang) {
-  // ZWNJ after 'बजे' keeps the 'े' matra from dropping at line end in PDFKit.
-  const hiSuffix = `${timeStr} बजे\u200C`;  // \u200C = ZWNJ
-  const enSuffix = `${timeStr} IST`;
-  return `${dateStr} ${lang === 'hi' ? hiSuffix : enSuffix}`;
-}
+// (removed) use fmtSubLine from './agents/utils.js'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Small utils + TRANSLATION HELPERS
@@ -394,8 +388,7 @@ async function composeDaily({ sign='aries', lang='en', now=new Date(), user=null
   const s = (sign || '').toLowerCase();
   const signLabel = signDisplay(s, lang);
   const { ist, dateStr, timeStr, weekdayIndex } = toISTParts(now);
-  // add NBSP so PDFKit doesn’t clip the 'े' matra at line end
-  const timeShort = (lang === 'hi') ? `${timeStr} बजे\u00A0` : `${timeStr} IST`;
+  const timeShort = fmtTimeIST(timeStr, lang);
   const monthSalt = dateStr.slice(0,7);
   const seed = hashCode(`${monthSalt}|${s}|${dateStr}`);
 
@@ -1009,7 +1002,7 @@ app.post('/report/yearly', async (req, res) => {
     // PDF setup
     const doc = new PDFDocument({ margin: 36, bufferPages: true });
     const { dateStr, timeStr } = toISTParts(new Date());
-    const subLine = fmtSubLine(dateStr, timeStr, lang);
+    const subLine = fmtSubLine(dateStr, timeStr, effLang);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition',
       `attachment; filename="AstroBaba_Yearly_${sign}_${dateStr}_${effLang}.pdf"`);

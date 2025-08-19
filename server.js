@@ -614,8 +614,8 @@ app.post('/report/from-daily', async (req, res) => {
     applyFont(doc, { lang, weight: 'regular' });
 
     const titleLine = lang==='hi' ? 'दैनिक राशिफल' : 'Daily Horoscope';
-    const { dateStr, timeStr } = toISTParts(new Date());
-    const subLine = fmtSubLine(dateStr, timeStr, lang);
+    const { dateStr } = toISTParts(new Date());
+    const subLine = fmtSubLine(dateStr);
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
@@ -761,8 +761,8 @@ app.post('/report/gemstone', async (req, res) => {
   try {
     const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
     const lang = pickLang({ lang: rawLang }, req.headers);
-    const { dateStr, timeStr } = toISTParts(new Date());
-    const subLine = fmtSubLine(dateStr, timeStr, lang);
+    const { dateStr } = toISTParts(new Date());
+    const subLine = fmtSubLine(dateStr);
     const plan = gemPlanForSign(sign);
     const planet = rulerForSign(sign);
 
@@ -851,7 +851,7 @@ app.post('/report/generate', async (req, res) => {
     const { package: pkg = 'gemstone', user = {}, brand = {}, lang: rawLang } = req.body || {};
     const lang = pickLang({ lang: rawLang }, req.headers);
     const now  = new Date();
-    const { dateStr, timeStr } = toISTParts(now);
+    const { dateStr } = toISTParts(now);
 
     const titleLine = lang === 'hi' ? (pkg === 'mantra' ? 'मंत्र रिपोर्ट' : 'रत्न रिपोर्ट') : (pkg === 'mantra' ? 'Mantra Report' : 'Gemstone Report');
     const intro = lang === 'hi'
@@ -915,8 +915,8 @@ app.post('/report/mantra', async (req, res) => {
   try {
     const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
     const lang    = pickLang({ lang: rawLang }, req.headers);
-    const { dateStr, timeStr } = toISTParts(new Date());
-    const subLine = fmtSubLine(dateStr, timeStr, lang);
+    const { dateStr } = toISTParts(new Date());
+    const subLine = fmtSubLine(dateStr);
     const planet  = rulerForSign(sign);
     const seedMan = mantraForPlanet(planet);
 
@@ -1001,8 +1001,8 @@ app.post('/report/yearly', async (req, res) => {
 
     // PDF setup
     const doc = new PDFDocument({ margin: 36, bufferPages: true });
-    const { dateStr, timeStr } = toISTParts(new Date());
-    const subLine = fmtSubLine(dateStr, timeStr, effLang);
+    const { dateStr } = toISTParts(new Date());
+    const subLine = fmtSubLine(dateStr);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition',
       `attachment; filename="AstroBaba_Yearly_${sign}_${dateStr}_${effLang}.pdf"`);

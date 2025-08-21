@@ -1,0 +1,6 @@
+{
+  "package": "daily_horoscope",
+  "user": { "name": "Rajat", "phone": "+91-98xxxxxx" },
+  "brand": { "appName": "Astro-Baba" },
+  "inputs": { "zodiac": "Aries" }
+}

@@ -32,7 +32,7 @@ app.use((req, res, next) => {
 });
 
 // Build/meta headers
-const BUILD = '2025-08-17.04';
+const BUILD = '2025-08-19.01';
 app.use((req, res, next) => {
   res.setHeader('X-AB-Build', BUILD);
   res.setHeader('Cache-Control', 'no-store');
@@ -41,17 +41,33 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── Try to import yearly & family agents (ESM/CJS safe) ──────────────────────
+// ── Try to import yearly & family agents (robust URL import + logging) ───────
 let getYearlyForUser = null;
 let buildFamilySections = null;
+
 try {
-  const yearlyAgentMod = await import('./agents/yearlyAgent.js');
-  getYearlyForUser = yearlyAgentMod?.getYearlyForUser || yearlyAgentMod?.default?.getYearlyForUser || null;
-} catch {}
+  const yearlyUrl = new URL('./agents/yearlyAgent.js', import.meta.url);
+  const yearlyAgentMod = await import(yearlyUrl);
+  getYearlyForUser =
+    yearlyAgentMod?.getYearlyForUser ||
+    yearlyAgentMod?.default?.getYearlyForUser ||
+    null;
+  console.log('[yearlyAgent] loaded:', !!getYearlyForUser);
+} catch (e) {
+  console.error('[yearlyAgent] FAILED to load:', e?.message || e);
+}
+
 try {
-  const familyAgentMod = await import('./agents/familyAgent.js');
-  buildFamilySections = familyAgentMod?.buildFamilySections || familyAgentMod?.default?.buildFamilySections || null;
-} catch {}
+  const familyUrl = new URL('./agents/familyAgent.js', import.meta.url);
+  const familyAgentMod = await import(familyUrl);
+  buildFamilySections =
+    familyAgentMod?.buildFamilySections ||
+    familyAgentMod?.default?.buildFamilySections ||
+    null;
+  console.log('[familyAgent] loaded:', !!buildFamilySections);
+} catch (e) {
+  console.warn('[familyAgent] not loaded (optional):', e?.message || e);
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Paths / Fonts
@@ -128,96 +144,6 @@ function getVedicNames(lang = 'en') {
     gulikaKaal: 'Gulika Kaal',
     abhijitMuhurat: 'Abhijit Muhurat',
   };
-}
-
-// (removed) use fmtSubLine from './agents/utils.js'
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Small utils + TRANSLATION HELPERS
-// ─────────────────────────────────────────────────────────────────────────────
-function maskKey(k) {
-  if (!k) return '(none)';
-  if (k.length < 10) return k;
-  return `${k.slice(0, 8)}...${k.slice(-4)}`;
-}
-function pickLang(source = {}, headers = {}) {
-  const direct = (source?.lang || '').toString().toLowerCase();
-  if (direct) return direct.startsWith('hi') ? 'hi' : 'en';
-
-  const x = (headers['x-lang'] || '').toString().toLowerCase();
-  if (x) return x.startsWith('hi') ? 'hi' : 'en';
-
-  const al = (headers['accept-language'] || '').toString().toLowerCase();
-  if (al.startsWith('hi')) return 'hi';
-
-  return 'en';
-}
-async function txOne(lang, s) {
-  if (lang !== 'hi') return s;
-  try {
-    const out = await translateAgent?.(s, 'hi') ?? await translateAgent?.({ text: s, to: 'hi' });
-    if (!out) return s;
-    if (typeof out === 'string') return out;
-    return out?.text || s;
-  } catch { return s; }
-}
-async function tx(lang, v) {
-  if (lang !== 'hi') return v;
-  if (Array.isArray(v)) {
-    const arr = [];
-    for (const s of v) arr.push(await txOne(lang, String(s)));
-    return arr;
-  }
-  return await txOne(lang, String(v));
-}
-
-// Try a local logo if client didn’t send one
-function ensureBrandWithLogo(brand = {}) {
-  if (brand?.logoBase64) return brand;
-  const candidates = [
-    path.join(__dirname, 'logo.png'),
-    path.join(__dirname, 'assets', 'images', 'app_icon.png'),
-  ];
-  for (const p of candidates) {
-    try {
-      if (fs.existsSync(p)) {
-        const b64 = fs.readFileSync(p).toString('base64');
-        return { ...brand, logoBase64: b64 };
-      }
-    } catch {}
-  }
-  return brand;
-}
-
-// Blessing line
-const BLESS = {
-  en: 'Have a blessed day!! We wish you a very cheerful, prosperous and wonderful day ahead with lots of blessings.',
-  hi: 'आपका दिन मंगलमय हो! हम आपको अत्यंत हर्ष, समृद्धि और मंगलकामनाओं से भरा, आशीर्वादपूर्ण दिन की शुभकामनाएँ देते हैं।'
-};
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Vedic windows (12-hour day approximation; 6:00–18:00 with sunrise 06:00)
-// ─────────────────────────────────────────────────────────────────────────────
-function approxVedicSlots12h(weekday /*0..6*/) {
-  const rahu = {
-    0: '16:30–18:00', 1: '07:30–09:00', 2: '15:00–16:30',
-    3: '12:00–13:30', 4: '13:30–15:00', 5: '10:30–12:00', 6: '09:00–10:30',
-  }[weekday];
-  const yamaganda = {
-    0: '12:00–13:30', 1: '10:30–12:00', 2: '09:00–10:30',
-    3: '07:30–09:00', 4: '06:00–07:30', 5: '15:00–16:30', 6: '13:30–15:00',
-  }[weekday];
-  const gulika = {
-    0: '15:00–16:30', 1: '13:30–15:00', 2: '12:00–13:30',
-    3: '10:30–12:00', 4: '09:00–10:30', 5: '07:30–09:00', 6: '06:00–07:30',
-  }[weekday];
-  const abhijit = '12:05–12:52';
-  return { rahuKaal: rahu, yamaganda, gulikaKaal: gulika, abhijitMuhurat: abhijit };
-}
-function vedicAssumptionNote(lang='en') {
-  return lang === 'hi'
-    ? 'टिप्पणी: वैदिक समय 06:00 सूर्योदय और 12 घंटे के दिन पर आधारित सरलीकृत अनुमान हैं — स्थान/ऋतु के अनुसार बदल सकते हैं।'
-    : 'Note: Vedic windows use a 6:00 AM sunrise and 12-hour day approximation — actual times vary by location/season.';
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -317,7 +243,136 @@ function addSection(doc, { lang, heading, paragraphs = [] }) {
   doc.moveDown(0.4);
 }
 
-// ── Yearly helpers (kept for future) ─────────────────────────────────────────
+// --- header/date helpers for yearly ---
+function fmtDateShortDisplay(dateStr) {
+  try {
+    const [y, m, d] = String(dateStr).split('-').map(Number);
+    const dt = new Date(Date.UTC(y, (m || 1) - 1, d || 1));
+    return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'UTC' }); // e.g., 21 Aug 2025
+  } catch { return dateStr; }
+}
+function monthYearShort(dt) {
+  return dt.toLocaleDateString('en-GB', { month: 'short', year: 'numeric', timeZone: 'UTC' }); // e.g., Aug 2025
+}
+function anchorRangeLabel(anchor) {
+  const start = new Date(anchor);
+  const end = addMonthsUTC(anchor, 11);
+  return `${monthYearShort(start)} TO ${monthYearShort(end)}`; // ASCII "TO"
+}
+
+// Yearly-specific user details (no "Details:" heading)
+function addUserDetailsYearly(doc, { user = {} }) {
+  const u = user || {};
+  const rows = [];
+  const push = (label, value) => { if (value) rows.push([label, String(value)]); };
+
+  push('Name', u.name);
+  push('Phone No.', u.phone);
+  push('Email', u.email);
+  push('Date of Birth (DOB)', u.dob);
+  push('Place of Birth', u.place || u.placeOfBirth);
+  push('Time of Birth', u.time || u.tob || u.timeOfBirth);
+  push('Sex', u.gender || u.sex);
+  push('Occupation', u.occupation || u.job || u.profession);
+  push('Language', u.lang || u.language);
+
+  if (!rows.length) return;
+  doc.moveDown(0.2);
+  rows.forEach(([k, v]) => doc.text(`${k}: ${cleanText(v)}`));
+  doc.moveDown(0.6);
+}
+
+// (removed) use fmtSubLine from './agents/utils.js'
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Small utils + TRANSLATION HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+function maskKey(k) {
+  if (!k) return '(none)';
+  if (k.length < 10) return k;
+  return `${k.slice(0, 8)}...${k.slice(-4)}`;
+}
+function pickLang(source = {}, headers = {}) {
+  const direct = (source?.lang || '').toString().toLowerCase();
+  if (direct) return direct.startsWith('hi') ? 'hi' : 'en';
+
+  const x = (headers['x-lang'] || '').toString().toLowerCase();
+  if (x) return x.startsWith('hi') ? 'hi' : 'en';
+
+  const al = (headers['accept-language'] || '').toString().toLowerCase();
+  if (al.startsWith('hi')) return 'hi';
+
+  return 'en';
+}
+async function txOne(lang, s) {
+  if (lang !== 'hi') return s;
+  try {
+    const out = await translateAgent?.(s, 'hi') ?? await translateAgent?.({ text: s, to: 'hi' });
+    if (!out) return s;
+    if (typeof out === 'string') return out;
+    return out?.text || s;
+  } catch { return s; }
+}
+async function tx(lang, v) {
+  if (lang !== 'hi') return v;
+  if (Array.isArray(v)) {
+    const arr = [];
+    for (const s of v) arr.push(await txOne(lang, String(s)));
+    return arr;
+  }
+  return await txOne(lang, String(v));
+}
+
+// Try a local logo if client didn’t send one
+function ensureBrandWithLogo(brand = {}) {
+  if (brand?.logoBase64) return brand;
+  const candidates = [
+    path.join(__dirname, 'logo.png'),
+    path.join(__dirname, 'assets', 'images', 'app_icon.png'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p)) {
+        const b64 = fs.readFileSync(p).toString('base64');
+        return { ...brand, logoBase64: b64 };
+      }
+    } catch {}
+  }
+  return brand;
+}
+
+// Blessing line
+const BLESS = {
+  en: 'Have a blessed day!! We wish you a very cheerful, prosperous and wonderful day ahead with lots of blessings.',
+  hi: 'आपका दिन मंगलमय हो! हम आपको अत्यंत हर्ष, समृद्धि और मंगलकामनाओं से भरा, आशीर्वादपूर्ण दिन की शुभकामनाएँ देते हैं।'
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Vedic windows (12-hour day approximation; 6:00–18:00 with sunrise 06:00)
+// ─────────────────────────────────────────────────────────────────────────────
+function approxVedicSlots12h(weekday /*0..6*/) {
+  const rahu = {
+    0: '16:30–18:00', 1: '07:30–09:00', 2: '15:00–16:30',
+    3: '12:00–13:30', 4: '13:30–15:00', 5: '10:30–12:00', 6: '09:00–10:30',
+  }[weekday];
+  const yamaganda = {
+    0: '12:00–13:30', 1: '10:30–12:00', 2: '09:00–10:30',
+    3: '07:30–09:00', 4: '06:00–07:30', 5: '15:00–16:30', 6: '13:30–15:00',
+  }[weekday];
+  const gulika = {
+    0: '15:00–16:30', 1: '13:30–15:00', 2: '12:00–13:30',
+    3: '10:30–12:00', 4: '09:00–10:30', 5: '07:30–09:00', 6: '06:00–07:30',
+  }[weekday];
+  const abhijit = '12:05–12:52';
+  return { rahuKaal: rahu, yamaganda, gulikaKaal: gulika, abhijitMuhurat: abhijit };
+}
+function vedicAssumptionNote(lang='en') {
+  return lang === 'hi'
+    ? 'टिप्पणी: वैदिक समय 06:00 सूर्योदय और 12 घंटे के दिन पर आधारित सरलीकृत अनुमान हैं — स्थान/ऋतु के अनुसार बदल सकते हैं।'
+    : 'Note: Vedic windows use a 6:00 AM sunrise and 12-hour day approximation — actual times vary by location/season.';
+}
+
+// ── Yearly helpers (single definitions; no duplicates) ───────────────────────
 function labelFor(dt, lang='en') {
   const locale = lang === 'hi' ? 'hi-IN' : 'en-GB';
   return dt.toLocaleDateString(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -337,34 +392,12 @@ function addPhaseBlocks(doc, { lang, phaseBlocks }) {
   ];
   pairs.forEach(([en, hi]) => {
     const items = phaseBlocks?.[en.toLowerCase()] || [];
-    applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(14).text(lang==='hi'?hi:en); applyFont(doc, { lang });
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(14).text(lang==='hi'?hi:en);
+    applyFont(doc, { lang });
     drawBullets(doc, items, { lang });
     doc.moveDown(0.3);
   });
-}
-function addMonthPage(doc, { lang, m, dt }) {
-  doc.addPage();
-  const title = `${labelFor(dt, lang)} — ${m?.label?.split('—').pop()?.trim() || (lang==='hi'?'केंद्रित रहें • प्रवाह':'Focus & Flow')}`;
-  applyFont(doc, { lang, weight: 'bold' }); doc.fontSize(16).text(title, { underline: true }); applyFont(doc, { lang });
-  doc.moveDown(0.6);
-  const healthConcerns = (m?.health?.concerns || '').trim();
-  const healthTips = (m?.health?.tips || '').trim();
-  const healthText = (healthConcerns || healthTips)
-    ? `${healthConcerns}${healthConcerns && healthTips ? ' — ' : ''}${lang==='hi'?'सुझाव':'Tips'}: ${healthTips}`
-    : '';
-  const kv = [
-    [lang==='hi'?'परिदृश्य':'Outlook', m.outlook],
-    [lang==='hi'?'करियर/प्रयास':'Career/Effort', m.career],
-    [lang==='hi'?'धन':'Money', m.money],
-    [lang==='hi'?'संबंध/परिवार':'Relationships/Family', m.relationships],
-    [lang==='hi'?'स्वास्थ्य':'Health', healthText],
-    [lang==='hi'?'सीख':'Learning', m.learning],
-    [lang==='hi'?'यात्रा':'Travel', m.travel],
-    [lang==='hi'?'अवसर':'Opportunity', m.opportunity],
-    [lang==='hi'?'रक्षा':'Protection', m?.protection?.text || ''],
-    [lang==='hi'?'चेकपॉइंट':'Checkpoint', m.checkpoint],
-  ];
-  kv.forEach(([k,v]) => { if (v) { applyFont(doc, { lang, weight:'bold' }); doc.fontSize(12).text(`${k}:`); applyFont(doc, { lang }); doc.text(cleanText(v)).moveDown(0.25); } });
 }
 
 // Fallback if agents are missing: read from contentBank.yearly
@@ -374,11 +407,12 @@ function fallbackYearly({ sign, persona, anchorDate }) {
   const bucket = (persona && pb?.[persona]) || pb?.default || null;
   if (!bucket) throw new Error(`No yearly content for sign=${s}`);
   const monthsRaw = Array.isArray(bucket.months) ? bucket.months : [];
-  const phaseBlocks = bucket.phaseBlocks || { good:[], caution:[], fun:[], gains:[], health:[], relationships:[], opportunities:[], remedies:[] };
-
+  const phaseBlocks = bucket.phaseBlocks || {
+    good:[], caution:[], fun:[], gains:[], health:[], relationships:[], opportunities:[], remedies:[]
+  };
   const anchor = startOfMonthUTC(anchorDate ? new Date(anchorDate) : new Date());
   const months = Array.from({ length: 13 }, (_, i) => monthsRaw[i % monthsRaw.length] || {});
-  return { phaseBlocks, months, anchor };
+  return { phaseBlocks, months, anchor, meta: bucket.meta || {} };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -494,7 +528,6 @@ app.get('/debug/version', (req, res) => res.json({
   cwd: process.cwd(),
   fontsReady: FONTS_READY,
 }));
-
 app.get('/debug/routes', (req, res) => {
   const routes = [];
   (app._router?.stack || []).forEach((m) => {
@@ -508,43 +541,6 @@ app.get('/debug/routes', (req, res) => {
   });
   res.json({ ok: true, count: routes.length, routes });
 });
-
-// Simple 7-day JSON dry run (no cache, no PDF)
-app.get('/debug/weekly-dryrun', async (req, res) => {
-  try {
-    const sign = String(req.query.sign || 'aries').toLowerCase();
-    const lang = pickLang({ lang: req.query.lang }, req.headers);
-
-    const start = new Date();
-    const items = [];
-    const roll  = new Date(start);
-
-    for (let i = 0; i < 7; i++) {
-      const ts = new Date(roll);
-      const { dateStr } = toISTParts(ts);
-      const d = await composeDaily({ sign, lang, now: ts, user: null });
-      items.push({ date: dateStr, header: d?.header?.dayHeader, themeLead: d?.themeLead, ok: true });
-      roll.setDate(roll.getDate() + 1);
-    }
-
-    res.json({ ok: true, sign, lang, days: items.length, items });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e?.message || String(e) });
-  }
-});
-
-app.get('/debug/routes', (req, res) => {
-  const routes = [];
-  const push = (r) => routes.push({ method: Object.keys(r.methods)[0]?.toUpperCase() || 'GET', path: r.path });
-  app._router?.stack?.forEach((m) => {
-    if (m.route) push(m.route);
-    else if (m.name === 'router' && m.handle?.stack) {
-      m.handle.stack.forEach((h) => h.route && push(h.route));
-    }
-  });
-  res.json({ ok: true, build: BUILD, routes });
-});
-
 app.get('/debug/weekly-dryrun', async (req, res) => {
   try {
     const sign = String(req.query.sign || 'aries').toLowerCase();
@@ -615,7 +611,7 @@ app.post('/report/from-daily', async (req, res) => {
 
     const titleLine = lang==='hi' ? 'दैनिक राशिफल' : 'Daily Horoscope';
     const { dateStr } = toISTParts(new Date());
-    const subLine = fmtSubLine(dateStr);
+    const subLine = fmtSubLine(dateStr, lang);
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
@@ -762,7 +758,7 @@ app.post('/report/gemstone', async (req, res) => {
     const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
     const lang = pickLang({ lang: rawLang }, req.headers);
     const { dateStr } = toISTParts(new Date());
-    const subLine = fmtSubLine(dateStr);
+    const subLine = fmtSubLine(dateStr, lang);
     const plan = gemPlanForSign(sign);
     const planet = rulerForSign(sign);
 
@@ -873,7 +869,7 @@ app.post('/report/generate', async (req, res) => {
 
     applyFont(doc, { lang });
 
-    const subLine = fmtSubLine(dateStr, timeStr, lang);
+    const subLine = fmtSubLine(dateStr, lang);
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang, brand: brandFixed, titleLine, subLine });
 
@@ -916,7 +912,7 @@ app.post('/report/mantra', async (req, res) => {
     const { sign='aries', user={}, brand={}, lang: rawLang } = req.body || {};
     const lang    = pickLang({ lang: rawLang }, req.headers);
     const { dateStr } = toISTParts(new Date());
-    const subLine = fmtSubLine(dateStr);
+    const subLine = fmtSubLine(dateStr, lang);
     const planet  = rulerForSign(sign);
     const seedMan = mantraForPlanet(planet);
 
@@ -978,104 +974,278 @@ app.post('/report/mantra', async (req, res) => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// YEARLY → PDF
+// YEARLY (Option D) — helpers + routes (flow layout, single definitions)
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Small helpers for this section (unique names to avoid conflicts)
+function fmtDateShortDisplay(isoDate /* 'YYYY-MM-DD' */) {
+  try {
+    const d = new Date(isoDate);
+    const dd = d.getUTCDate();
+    const mon = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()];
+    const yyyy = d.getUTCFullYear();
+    return `${dd} ${mon} ${yyyy}`;
+  } catch { return isoDate; }
+}
+function ordinal(n) {
+  const s = ["th","st","nd","rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+function formatDOBPretty(dobStr /* e.g. 1988-03-19 */) {
+  try {
+    const d = new Date(dobStr);
+    const day = ordinal(d.getUTCDate());
+    const mon = ['January','February','March','April','May','June','July','August','September','October','November','December'][d.getUTCMonth()];
+    const yr  = d.getUTCFullYear();
+    return `${day} ${mon} ${yr}`;
+  } catch { return dobStr; }
+}
+function monthYearShortUTC(d) {
+  return `${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+function anchorRangeLabel(anchor /* Date at start-of-month UTC */) {
+  const start = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth(), 1));
+  const end   = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + 11, 1));
+  return `${monthYearShortUTC(start)} TO ${monthYearShortUTC(end)}`;
+}
+function addUserDetailsYearly(doc, { user = {} }) {
+  // no "Details:" heading, no Time line
+  const rows = [];
+  if (user.name)       rows.push(['Name', user.name]);
+  if (user.phone)      rows.push(['Phone', user.phone]);
+  if (user.email)      rows.push(['Email', user.email]);
+  if (user.gender)     rows.push(['Gender', user.gender]);
+  if (user.dob)        rows.push(['DOB', formatDOBPretty(user.dob)]);
+  if (user.place)      rows.push(['Place of Birth', user.place]);
+  if (user.occupation) rows.push(['Occupation', user.occupation]);
+  if (user.language)   rows.push(['Language', user.language]);
+
+  if (!rows.length) return;
+  doc.moveDown(0.2);
+  rows.forEach(([k, v]) => doc.fontSize(12).text(`${k}: ${v}`));
+  doc.moveDown(0.6);
+}
+
+// Render one month in a flowing layout (add a page only if space is low)
+function renderMonthFlow(doc, { lang = 'en', m = {}, dt = new Date() }) {
+  const bottom = doc.page.height - doc.page.margins.bottom;
+  if (doc.y > bottom - 220) doc.addPage();
+
+  const locale = lang === 'hi' ? 'hi-IN' : 'en-GB';
+  const monthTitle = dt.toLocaleDateString(locale, { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const sub = String(m.label || '').replace(/^.*?—\s*/, '').trim();
+  const title = sub ? `${monthTitle} — ${sub}` : monthTitle;
+
+  applyFont(doc, { lang, weight: 'bold' });
+  doc.fontSize(14).text(title);
+  applyFont(doc, { lang });
+  doc.moveDown(0.25);
+
+  const healthConcerns = (m?.health?.concerns || '').trim();
+  const healthTips = (m?.health?.tips || '').trim();
+  const healthText = (healthConcerns || healthTips)
+    ? `${healthConcerns}${healthConcerns && healthTips ? ' — ' : ''}${lang === 'hi' ? 'सुझाव' : 'Tips'}: ${healthTips}`
+    : '';
+
+  const kv = [
+    [lang === 'hi' ? 'परिदृश्य' : 'Outlook', m.outlook],
+    [lang === 'hi' ? 'घर/रूटीन' : 'Home & Routine', m.career],
+    [lang === 'hi' ? 'धन/आवश्यकताएँ' : 'Money & Essentials', m.money],
+    [lang === 'hi' ? 'संबंध/परिवार' : 'Relationships/Family', m.relationships],
+    [lang === 'hi' ? 'स्वास्थ्य' : 'Health', healthText],
+    [lang === 'hi' ? 'सीख' : 'Learning', m.learning],
+    [lang === 'hi' ? 'यात्रा/आवागमन' : 'Travel/Movement', m.travel],
+    [lang === 'hi' ? 'अवसर' : 'Opportunity', m.opportunity],
+    [lang === 'hi' ? 'रक्षा' : 'Protection', m?.protection?.text || ''],
+    [lang === 'hi' ? 'चेकपॉइंट' : 'Checkpoint', m.checkpoint],
+  ];
+
+  kv.forEach(([k, v]) => {
+    if (!v) return;
+    applyFont(doc, { lang, weight: 'bold' });
+    doc.fontSize(12).text(`${k}:`);
+    applyFont(doc, { lang });
+    doc.fontSize(12).text(cleanText(v));
+    doc.moveDown(0.25);
+  });
+
+  // soft divider
+  doc.moveDown(0.25);
+  doc.moveTo(doc.page.margins.left, doc.y)
+     .lineTo(doc.page.width - doc.page.margins.right, doc.y)
+     .strokeColor('#e6e6e6').stroke().strokeColor('black');
+  doc.moveDown(0.45);
+}
+
+// Quick agent check (ensures the yearly agent is loaded and months exist)
+app.get('/debug/yearly-check', async (req, res) => {
+  try {
+    const sign = String(req.query.sign || 'aries').toLowerCase();
+    const persona = String(req.query.persona || 'homemaker').toLowerCase();
+    const lang = pickLang({ lang: req.query.lang }, req.headers);
+
+    let source = 'fallback';
+    let Y = null;
+    if (typeof getYearlyForUser === 'function') {
+      try {
+        Y = await getYearlyForUser({ sign, persona, lang, anchorDate: '2025-08-01' });
+        source = 'agent';
+      } catch {}
+    }
+    if (!Y) Y = fallbackYearly({ sign, persona, anchorDate: '2025-08-01' });
+
+    res.json({
+      ok: true,
+      source,
+      hasMeta: !!Y?.meta,
+      holisticPreview: (Y?.meta?.holisticOverview || '').slice(0, 160),
+      monthsCount: (Y?.months || []).length,
+      firstMonthLabel: Y?.months?.[0]?.label || null
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e?.message || String(e) });
+  }
+});
+
+// YEARLY → PDF (Option D flow layout) — header & start polished per spec
 app.post('/report/yearly', async (req, res) => {
   try {
-    const { sign = 'aries', persona = 'default', brand = {}, lang: rawLang, anchorDate = null } = req.body || {};
-    const lang = pickLang({ lang: rawLang }, req.headers);
+    const { sign = 'aries', persona = 'homemaker', brand = {}, lang: rawLang, anchorDate = null } = req.body || {};
+    const lang    = pickLang({ lang: rawLang }, req.headers);
     const effLang = (lang === 'hi' && !FONTS_READY) ? 'en' : lang;
 
-    // get data (try agent, fallback to contentBank)
-    const Y = (typeof getYearlyForUser === 'function')
-      ? await getYearlyForUser({ sign, persona, anchorDate, lang: effLang })
-      : fallbackYearly({ sign, persona, anchorDate });
-
-    // translate phase blocks for Hindi (best-effort)
-    const phaseBlocks = { ...Y.phaseBlocks };
-    if (effLang === 'hi') {
-      for (const k of Object.keys(phaseBlocks)) {
-        phaseBlocks[k] = await toLangList(phaseBlocks[k], 'hi');
-      }
+    // Get content: agent first, then fallback
+    let Y, source = 'fallback';
+    if (typeof getYearlyForUser === 'function') {
+      try {
+        Y = await getYearlyForUser({ sign, persona, anchorDate, lang: effLang });
+        source = 'agent';
+      } catch {}
     }
+    if (!Y) Y = fallbackYearly({ sign, persona, anchorDate });
+    res.setHeader('X-AB-Yearly-Source', source);
 
-    // PDF setup
-    const doc = new PDFDocument({ margin: 36, bufferPages: true });
+    // Headers BEFORE streaming
     const { dateStr } = toISTParts(new Date());
-    const subLine = fmtSubLine(dateStr);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition',
       `attachment; filename="AstroBaba_Yearly_${sign}_${dateStr}_${effLang}.pdf"`);
 
+    // PDF
+    const doc = new PDFDocument({ margin: 36, bufferPages: true });
+    doc.pipe(res);
     applyFont(doc, { lang: effLang });
 
-    const titleLine = effLang === 'hi'
-      ? `वार्षिक राशिफल — ${signDisplay(sign, 'hi')}`
-      : `Yearly Horoscope — ${capSign(sign)}`;
+    // Title: no sign; Subline: "21 Aug 2025"
+    const titleLine = effLang === 'hi' ? 'वार्षिक राशिफल' : 'Yearly Horoscope';
+    const subLine   = fmtDateShortDisplay(dateStr);
+
     const brandFixed = ensureBrandWithLogo({ ...brand, appName: brand?.appName || 'Astro-Baba' });
     addBrandHeader(doc, { lang: effLang, brand: brandFixed, titleLine, subLine });
 
-    // Optional user block
-    addUserBlock(doc, {
-      lang: effLang,
-      user: {
-        name:  req.body?.user?.name,
-        phone: req.body?.user?.phone,
-        email: req.body?.user?.email,
-        gender:req.body?.user?.gender,
-        dob:   req.body?.user?.dob,
-        tob:   req.body?.user?.time || req.body?.user?.tob,
-        place: req.body?.user?.place,
-      },
-    });
+    // Clean user details (no "Details:", no Time)
+    addUserDetailsYearly(doc, { user: req.body?.user || {} });
 
-    // Page 1 — Phase blocks
+    // Greeting line (without name)
+    doc.fontSize(12).text(effLang === 'hi' ? 'नमस्ते जी' : 'Namaste ji');
+    doc.moveDown(0.4);
+
+    // Holistic Overview with ASCII "TO" range; prefix "<name> ji, " to paragraph if name present
+    const H = Y.meta || {};
+    const range = Y?.anchor ? anchorRangeLabel(Y.anchor) : null;
+    const nameJi = req.body?.user?.name ? `${req.body.user.name} ji, ` : '';
+    const overviewPara = H.holisticOverview ? `${nameJi}${H.holisticOverview}` : '';
+
     addSection(doc, {
       lang: effLang,
-      heading: effLang === 'hi' ? 'वर्ष का स्वर' : 'Tone of the Year',
-      paragraphs: []
+      heading: range
+        ? (effLang === 'hi' ? `समग्र झलक (${range})` : `Holistic Overview (${range})`)
+        : (effLang === 'hi' ? 'समग्र झलक' : 'Holistic Overview'),
+      paragraphs: [overviewPara]
     });
-    addPhaseBlocks(doc, { lang: effLang, phaseBlocks });
 
-    // Month pages (12)
-    const anchor = Y.anchor; // start-of-month UTC
-    for (let i = 0; i < 12; i++) {
-      const dt = addMonthsUTC(anchor, i);
-      const m = Y.months[i] || {};
-      // Translate key strings for Hindi
-      if (effLang === 'hi') {
-        for (const key of ['label','outlook','career','money','relationships','learning','travel','opportunity','checkpoint']) {
-          if (m[key]) m[key] = await toLang(m[key], 'hi');
-        }
-        if (m?.health?.concerns) m.health.concerns = await toLang(m.health.concerns, 'hi');
-        if (m?.health?.tips)     m.health.tips     = await toLang(m.health.tips, 'hi');
-        if (m?.protection?.text) m.protection.text = await toLang(m.protection.text, 'hi');
-      }
-      addMonthPage(doc, { lang: effLang, m, dt });
+    // Remaining sections unchanged
+    if (H.vedicSciences?.length) {
+      applyFont(doc, { lang: effLang, weight: 'bold' });
+      doc.fontSize(14).text(effLang === 'hi' ? 'वैदिक संकेत (मृदु स्वर)' : 'Vedic Sciences (soft tone)');
+      applyFont(doc, { lang: effLang }); doc.moveDown(0.2);
+      drawBullets(doc, H.vedicSciences, { lang: effLang });
+    }
+    if (H.numerologyArc?.length) {
+      applyFont(doc, { lang: effLang, weight: 'bold' });
+      doc.fontSize(14).text(effLang === 'hi' ? 'अंक-स्वर' : 'Numerology arc');
+      applyFont(doc, { lang: effLang }); doc.moveDown(0.2);
+      drawBullets(doc, H.numerologyArc, { lang: effLang });
+    }
+    if (H.summary) {
+      addSection(doc, { lang: effLang, heading: effLang === 'hi' ? 'सार' : 'Summary', paragraphs: [H.summary] });
+    }
+    if (H.planetHighlights?.length) {
+      applyFont(doc, { lang: effLang, weight: 'bold' });
+      doc.fontSize(14).text(effLang === 'hi' ? 'ग्रह-हाइलाइट्स' : 'Planetary Highlights');
+      applyFont(doc, { lang: effLang }); doc.moveDown(0.2);
+      drawBullets(doc, H.planetHighlights, { lang: effLang });
+    }
+    if (H.favorableWindows?.length) {
+      applyFont(doc, { lang: effLang, weight: 'bold' });
+      doc.fontSize(14).text(effLang === 'hi' ? 'शुभ समय-खिड़कियाँ' : 'Favorable Windows (timing hygiene)');
+      applyFont(doc, { lang: effLang }); doc.moveDown(0.2);
+      drawBullets(doc, H.favorableWindows, { lang: effLang });
     }
 
-    const pol = policyAgent(effLang);
+    addSection(doc, { lang: effLang, heading: effLang === 'hi' ? 'चरण एक नज़र में' : 'Phases at a Glance', paragraphs: [] });
+    addPhaseBlocks(doc, { lang: effLang, phaseBlocks: Y.phaseBlocks });
+
+    if (H.newOpportunities?.length) {
+      applyFont(doc, { lang: effLang, weight: 'bold' });
+      doc.fontSize(14).text(effLang === 'hi' ? 'नए अवसर' : 'New Opportunities');
+      applyFont(doc, { lang: effLang }); doc.moveDown(0.2);
+      drawBullets(doc, H.newOpportunities, { lang: effLang });
+    }
+    if (H.remediesMantras?.length) {
+      applyFont(doc, { lang: effLang, weight: 'bold' });
+      doc.fontSize(14).text(effLang === 'hi' ? 'उपाय एवं मंत्र' : 'Remedies & Mantras (by phase)');
+      applyFont(doc, { lang: effLang }); doc.moveDown(0.2);
+      drawBullets(doc, H.remediesMantras, { lang: effLang });
+    }
+    if (H.gemstoneNote) {
+      addSection(doc, { lang: effLang, heading: effLang === 'hi' ? 'रत्न' : 'Gemstones', paragraphs: [H.gemstoneNote] });
+    }
+
+    // Months — continuous
+    const anchor = Y.anchor;
+    for (let i = 0; i < 12; i++) {
+      const dt = new Date(Date.UTC(anchor.getUTCFullYear(), anchor.getUTCMonth() + i, 1));
+      const m = Y.months[i] || {};
+      renderMonthFlow(doc, { lang: effLang, m, dt });
+    }
+
+    // Notes & Care
+    if (H.notesCare?.length) {
+      doc.addPage();
+      applyFont(doc, { lang: effLang, weight: 'bold' });
+      doc.fontSize(16).text(effLang === 'hi' ? 'टिप्पणियाँ एवं देखभाल' : 'Notes & Care', { underline: true });
+      applyFont(doc, { lang: effLang }); doc.moveDown(0.4);
+      drawBullets(doc, H.notesCare, { lang: effLang });
+    }
+
+    // Blessing/footer
     doc.moveDown(0.8);
     applyFont(doc, { lang: effLang, weight: 'bold' });
-    doc.fontSize(12).text(effLang === 'hi' ? 'अंतिम नोट' : 'Final Note');
-    applyFont(doc, { lang: effLang });
-    doc.moveDown(0.2);
-    doc.fontSize(11).text(pol.disclaimer || '');
-    doc.moveDown(0.6);
-    doc.fontSize(12).text(pol.thanks || '');
-    doc.moveDown(0.2);
-    applyFont(doc, { lang: effLang, weight: 'bold' });
-    doc.fontSize(12).text(effLang === 'hi' ? BLESS.hi : BLESS.en);
+    doc.fontSize(12).text(effLang === 'hi'
+      ? 'आपका वर्ष मंगलमय हो! हम आपको हर्ष, समृद्धि और शुभाशीष से भरे वर्ष की शुभकामनाएँ देते हैं।'
+      : 'Have a blessed year! We wish you a cheerful, prosperous, and wonderful year ahead with many blessings.');
     applyFont(doc, { lang: effLang });
 
+    const pol = policyAgent(effLang);
     const year = new Date().getFullYear();
-    doc.moveDown(0.8);
+    doc.moveDown(0.6);
     doc.fontSize(9).fillColor('#555').text(`© ${year} ${pol.footerBrand || 'Astro-Baba.com'}`, { align: 'center' });
     doc.fillColor('black');
 
-    doc.pipe(res); doc.end();
+    doc.end();
   } catch (e) {
-    return res.status(500).json({ error: e?.message || String(e) });
+    if (!res.headersSent) res.status(500).json({ error: e?.message || String(e) });
   }
 });
 

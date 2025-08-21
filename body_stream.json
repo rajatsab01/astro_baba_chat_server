@@ -1,0 +1,5 @@
+{
+  "messages": [
+    { "role": "user", "content": "Stream a one-line greeting." }
+  ]
+}

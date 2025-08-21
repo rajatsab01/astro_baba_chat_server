@@ -1,17 +1,17 @@
-# Dependencies
+# Node
 node_modules/
+npm-debug.log*
+# Lock file (optional; keep if you prefer deterministic installs)
+# package-lock.json
 
-# Environment files
+# Secrets
 .env
 .env.*
-!.env.example
 
-# Local test artifacts (curl bodies & generated PDFs)
-body*.json
-report_body.json
-out.pdf
+# Generated/cache
+data/cache/
 *.pdf
 
-# Misc local folders accidentally created
-npm/
-.github/ 
+# OS cruft
+.DS_Store
+Thumbs.db

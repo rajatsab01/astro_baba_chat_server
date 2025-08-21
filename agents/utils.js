@@ -27,66 +27,120 @@ export function signIndex(sign='aries'){
 }
 
 /**
- * Bulletproof IST parts:
- * - Primary: Intl.DateTimeFormat parts with Asia/Kolkata
- * - Fallback: manual +05:30 offset (IST has no DST)
+ * Bulletproof IST parts (no locale string round-trips):
+ * - Uses Intl.DateTimeFormat with Asia/Kolkata
+ * - Also returns an IST-shifted Date for convenience (epoch moved +05:30)
  * Returns:
- *  { ist: Date (IST-shifted epoch for convenience), dateStr: 'YYYY-MM-DD', timeStr: 'HH:MM IST', weekdayIndex: 0..6 }
+ *  { ist: Date(IST-shifted), dateStr:'YYYY-MM-DD', timeStr:'HH:MM', weekdayIndex:0..6 }
+ * NOTE: timeStr has NO suffix. Use fmtTimeIST if you need a time label elsewhere.
  */
 export function toISTParts(d = new Date()) {
   const date = (d instanceof Date) ? d : new Date(d);
-  // helper to create an IST-shifted Date (epoch moved by +330 minutes)
+  const tz = 'Asia/Kolkata';
+
+  // IST-shifted Date (epoch +330 mins) — handy if downstream code assumes local clock == IST
   const makeISTDate = (base) => {
     const utcMs = base.getTime() + base.getTimezoneOffset() * 60000;
     return new Date(utcMs + 330 * 60000);
   };
 
   try {
-    // Use Intl parts to avoid locale string round-trips
-    const fmt = new Intl.DateTimeFormat('en-GB', {
-      timeZone: 'Asia/Kolkata',
-      year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', hour12: false,
-      weekday: 'short'
-    });
-    const parts = Object.fromEntries(fmt.formatToParts(date).map(p => [p.type, p.value]));
-    const y   = Number(parts.year);
-    const m   = parts.month;
-    const day = parts.day;
-    const hh  = parts.hour;
-    const mm  = parts.minute;
+    const dateFmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' });
+    const timeFmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false });
+    const wdFmt   = new Intl.DateTimeFormat('en-US', { timeZone: tz, weekday: 'short' });
 
-    const wmap = { Sun:0, Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6 };
-    const weekdayIndex = wmap[parts.weekday] ?? 0;
+    const dp = dateFmt.formatToParts(date);
+    const y  = dp.find(p => p.type === 'year').value;
+    const m  = dp.find(p => p.type === 'month').value;
+    const da = dp.find(p => p.type === 'day').value;
+    const dateStr = `${y}-${m}-${da}`;
 
-    const istDate = makeISTDate(date); // convenient IST-shifted Date instance
-    const dateStr = `${y}-${m}-${day}`;
-    const timeStr = `${hh}:${mm} IST`;
-    return { ist: istDate, dateStr, timeStr, weekdayIndex };
+    const tp = timeFmt.formatToParts(date);
+    const hh = tp.find(p => p.type === 'hour').value;
+    const mm = tp.find(p => p.type === 'minute').value;
+    const timeStr = `${hh}:${mm}`; // <- no suffix here
+
+    const wdName = wdFmt.format(date); // Sun..Sat
+    const wdMap = { Sun:0, Mon:1, Tue:2, Wed:3, Thu:4, Fri:5, Sat:6 };
+    const weekdayIndex = wdMap[wdName] ?? 0;
+
+    return { ist: makeISTDate(date), dateStr, timeStr, weekdayIndex };
   } catch {
     // Fallback: constant +05:30 offset math
-    const istDate = makeISTDate(date);
-    const y  = istDate.getUTCFullYear();
-    const m  = String(istDate.getUTCMonth() + 1).padStart(2, '0');
-    const dd = String(istDate.getUTCDate()).padStart(2, '0');
-    const hh = String(istDate.getUTCHours()).padStart(2, '0');
-    const mm = String(istDate.getUTCMinutes()).padStart(2, '0');
-    const weekdayIndex = istDate.getUTCDay();
-    return { ist: istDate, dateStr: `${y}-${m}-${dd}`, timeStr: `${hh}:${mm} IST`, weekdayIndex };
+    const ist = makeISTDate(date);
+    const y  = ist.getUTCFullYear();
+    const m  = String(ist.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(ist.getUTCDate()).padStart(2, '0');
+    const hh = String(ist.getUTCHours()).padStart(2, '0');
+    const mm = String(ist.getUTCMinutes()).padStart(2, '0');
+    const weekdayIndex = ist.getUTCDay();
+    return { ist, dateStr: `${y}-${m}-${dd}`, timeStr: `${hh}:${mm}`, weekdayIndex };
+  }
+}
+
+/** Uppercased day+date header rendered in target language for IST. */
+export function dayDateHeaderUpper(lang='en', d=new Date()){
+  const tz = 'Asia/Kolkata';
+  if (lang === 'hi') {
+    return new Intl.DateTimeFormat('hi-IN', { timeZone: tz, weekday:'long', day:'2-digit', month:'long', year:'numeric' }).format(d);
+  }
+  return new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday:'long', day:'2-digit', month:'short', year:'numeric' }).format(d).toUpperCase();
+}
+
+/** Legacy: append time suffix for language (kept for non-header uses). */
+export function fmtTimeIST(timeStr = '00:00', lang = 'en') {
+  // ZWNJ after 'े' helps avoid clipping at line-end in some fonts.
+  return (lang === 'hi') ? `${timeStr} बजे\u200C` : `${timeStr} IST`;
+}
+
+// — Date-only pretty formatting for header sublines —
+// English wants "19th aug 2025" (lowercase 3-letter month); Hindi uses long month (e.g., "19 अगस्त 2025").
+function ordinal(n) {
+  const j = n % 10, k = n % 100;
+  if (k === 11 || k === 12 || k === 13) return `${n}th`;
+  if (j === 1) return `${n}st`;
+  if (j === 2) return `${n}nd`;
+  if (j === 3) return `${n}rd`;
+  return `${n}th`;
+}
+
+function formatDateHuman(dateStrOrDate, lang = 'en') {
+  let y, m, d;
+  if (dateStrOrDate instanceof Date) {
+    const { dateStr } = toISTParts(dateStrOrDate);
+    [y, m, d] = dateStr.split('-').map(Number);
+  } else if (typeof dateStrOrDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(dateStrOrDate)) {
+    [y, m, d] = dateStrOrDate.split('-').map(Number);
+  } else {
+    const { dateStr } = toISTParts(new Date());
+    [y, m, d] = dateStr.split('-').map(Number);
+  }
+
+  if (lang === 'hi') {
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    return new Intl.DateTimeFormat('hi-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'long', year: 'numeric' }).format(dt);
+  } else {
+    const months = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+    return `${ordinal(d)} ${months[m - 1]} ${y}`;
   }
 }
 
 /**
- * Uppercased day+date header rendered in target language for IST.
- * No string round-trip; formats directly in the timezone.
+ * Date-only header line. Backward compatible with old signature:
+ *   fmtSubLine(dateStr)                       -> date-only
+ *   fmtSubLine(dateStr, 'en'|'hi')           -> date-only
+ *   fmtSubLine(dateStr, timeStr, lang='en')  -> date-only (time is ignored)
  */
-export function dayDateHeaderUpper(lang='en', d=new Date()){
-  const locale = lang === 'hi' ? 'hi-IN' : 'en-GB';
-  const opts = lang === 'hi'
-    ? { weekday:'long', day:'2-digit', month:'long', year:'numeric', timeZone: 'Asia/Kolkata' }
-    : { weekday:'long', day:'2-digit', month:'short', year:'numeric', timeZone: 'Asia/Kolkata' };
-  const text = new Intl.DateTimeFormat(locale, opts).format(d);
-  return lang === 'hi' ? text : text.toUpperCase();
+export function fmtSubLine(dateOrDateStr, maybeTimeOrLang = 'en', maybeLang) {
+  const lang = (maybeLang ? maybeLang
+            : (maybeTimeOrLang === 'hi' || maybeTimeOrLang === 'en') ? maybeTimeOrLang
+            : 'en');
+  return formatDateHuman(dateOrDateStr, lang);
+}
+
+/** Convenience: from a Date → date-only header line. */
+export function fmtSubLineFromDate(d = new Date(), lang = 'en') {
+  return fmtSubLine(d, lang);
 }
 
 export function cleanText(s=''){
